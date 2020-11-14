@@ -1,111 +1,84 @@
-use std::io;
 use std::collections::VecDeque;
+use std::io;
 
-use bytes::{BytesMut, Bytes};
+use bytes::{Bytes, BytesMut};
 use tokio::select;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::pack::{Error as UnpackError, Pack, Unpack};
 use crate::packet as pkt;
+use crate::packet::Response;
 use crate::sock::{AttListener, AttStream};
-use crate::pack::{Pack, Unpack, Error as UnpackError};
 
 #[derive(Debug, thiserror::Error)]
-pub enum RequestError {
-    #[error("error response {0:?} {1:?}")]
-    ErrorResponse(pkt::Handle, pkt::ErrorCode),
-}
+#[error("error response {0:?} {1:?}")]
+pub struct ErrorResponse(pkt::Handle, pkt::ErrorCode);
 
-impl From<(pkt::Handle, pkt::ErrorCode)> for RequestError {
-    fn from(v: (pkt::Handle, pkt::ErrorCode)) -> Self {
-        Self::ErrorResponse(v.0, v.1)
+impl ErrorResponse {
+    pub fn new(handle: pkt::Handle, code: pkt::ErrorCode) -> Self {
+        Self(handle, code)
     }
 }
-
-pub type RequestResult<T> = Result<T, RequestError>;
-
-#[derive(Debug, thiserror::Error)]
-pub enum CommandError {
-}
-
-pub type CommandResult<T> = Result<T, CommandError>;
 
 pub trait Handler {
     fn handle_exchange_mtu_request(
         &mut self,
         item: &pkt::ExchangeMtuRequest,
-    ) -> RequestResult<pkt::ExchangeMtuResponse>;
+    ) -> Result<pkt::ExchangeMtuResponse, ErrorResponse>;
 
     fn handle_find_information_request(
         &mut self,
         item: &pkt::FindInformationRequest,
-    ) -> RequestResult<pkt::FindInformationResponse>;
+    ) -> Result<pkt::FindInformationResponse, ErrorResponse>;
 
     fn handle_find_by_type_value_request(
         &mut self,
         item: &pkt::FindByTypeValueRequest,
-    ) -> RequestResult<pkt::FindByTypeValueResponse>;
+    ) -> Result<pkt::FindByTypeValueResponse, ErrorResponse>;
 
     fn handle_read_by_type_request(
         &mut self,
         item: &pkt::ReadByTypeRequest,
-    ) -> RequestResult<pkt::ReadByTypeResponse>;
+    ) -> Result<pkt::ReadByTypeResponse, ErrorResponse>;
 
     fn handle_read_request(
         &mut self,
         item: &pkt::ReadRequest,
-    ) -> RequestResult<pkt::ReadResponse>;
+    ) -> Result<pkt::ReadResponse, ErrorResponse>;
 
     fn handle_read_blob_request(
         &mut self,
         item: &pkt::ReadBlobRequest,
-    ) -> RequestResult<pkt::ReadBlobResponse>;
+    ) -> Result<pkt::ReadBlobResponse, ErrorResponse>;
 
     fn handle_read_multiple_request(
         &mut self,
         item: &pkt::ReadMultipleRequest,
-    ) -> RequestResult<pkt::ReadMultipleResponse>;
+    ) -> Result<pkt::ReadMultipleResponse, ErrorResponse>;
 
     fn handle_read_by_group_type_request(
         &mut self,
         item: &pkt::ReadByGroupTypeRequest,
-    ) -> RequestResult<pkt::ReadByGroupTypeResponse>;
+    ) -> Result<pkt::ReadByGroupTypeResponse, ErrorResponse>;
 
     fn handle_write_request(
         &mut self,
         item: &pkt::WriteRequest,
-    ) -> RequestResult<pkt::WriteResponse>;
+    ) -> Result<pkt::WriteResponse, ErrorResponse>;
 
-    fn handle_write_command(
-        &mut self,
-        item: &pkt::WriteCommand,
-    ) -> CommandResult<()>;
+    fn handle_write_command(&mut self, item: &pkt::WriteCommand);
 
     fn handle_prepare_write_request(
         &mut self,
         item: &pkt::PrepareWriteRequest,
-    ) -> RequestResult<pkt::PrepareWriteResponse>;
+    ) -> Result<pkt::PrepareWriteResponse, ErrorResponse>;
 
     fn handle_execute_write_request(
         &mut self,
         item: &pkt::ExecuteWriteRequest,
-    ) -> RequestResult<pkt::ExecuteWriteResponse>;
+    ) -> Result<pkt::ExecuteWriteResponse, ErrorResponse>;
 
-    fn handle_signed_write_command(
-        &mut self,
-        item: &pkt::SignedWriteCommand,
-    ) -> CommandResult<()>;
-
-}
-
-fn response<R>(v: Result<R::Response, RequestError>) -> Result<pkt::Packet, RunError>
-where R: pkt::Request + pkt::HasOpCode, R::Response: Into<pkt::Packet> {
-    match v {
-        Ok(v) => Ok(v.into()),
-        Err(RequestError::ErrorResponse(handle, err)) => {
-            Ok(pkt::ErrorResponse::new(R::opcode(), handle, err).into())
-        }
-        Err(err) => Err(RunError::Handler(Box::new(err))),
-    }
+    fn handle_signed_write_command(&mut self, item: &pkt::SignedWriteCommand);
 }
 
 #[derive(Debug)]
@@ -133,17 +106,22 @@ pub struct Outbound {
 
 impl Outbound {
     pub fn notify(&self, handle: pkt::Handle, value: Bytes) -> Result<(), NotifyError> {
-        self.tx.send(OutgoingMessage::Notification(
-                pkt::HandleValueNotification::new(handle, value)))
-                .map_err(|_| NotifyError::Closed)?;
+        self.tx
+            .send(OutgoingMessage::Notification(
+                pkt::HandleValueNotification::new(handle, value),
+            ))
+            .map_err(|_| NotifyError::Closed)?;
         Ok(())
     }
 
     pub async fn indicate(&self, handle: pkt::Handle, value: Bytes) -> Result<(), IndicateError> {
         let (tx, rx) = oneshot::channel();
-        self.tx.send(OutgoingMessage::Indication(
-                pkt::HandleValueIndication::new(handle, value), tx))
-                .map_err(|_| IndicateError::Closed)?;
+        self.tx
+            .send(OutgoingMessage::Indication(
+                pkt::HandleValueIndication::new(handle, value),
+                tx,
+            ))
+            .map_err(|_| IndicateError::Closed)?;
         rx.await.map_err(|_| IndicateError::Closed)?;
         Ok(())
     }
@@ -158,9 +136,6 @@ pub enum RunError {
 
     #[error(transparent)]
     Unpack(#[from] UnpackError),
-
-    #[error(transparent)]
-    Handler(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
 #[derive(Debug)]
@@ -186,6 +161,22 @@ async fn send(sock: &AttStream, buf: &mut BytesMut, packet: pkt::Packet) -> Resu
     Ok(())
 }
 
+fn response<R>(r: Result<R::Response, ErrorResponse>, mtu: usize) -> pkt::Packet
+where
+    R: pkt::Request + pkt::HasOpCode,
+    R::Response: Into<pkt::Packet>,
+{
+    match r {
+        Ok(mut r) => {
+            r.truncate(mtu);
+            r.into()
+        }
+        Err(ErrorResponse(handle, code)) => {
+            pkt::ErrorResponse::new(R::opcode(), handle, code).into()
+        }
+    }
+}
+
 impl Connection {
     pub fn outbound(&self) -> Outbound {
         Outbound {
@@ -193,8 +184,12 @@ impl Connection {
         }
     }
 
-    pub async fn run<H>(self, mut handler: H) -> Result<(), RunError> where H: Handler {
+    pub async fn run<H>(self, mut handler: H) -> Result<(), RunError>
+    where
+        H: Handler,
+    {
         let Self { sock, mut rx, .. } = self;
+        let mut mtu = DEFAULT_MTU;
         let mut rbuf = vec![0; DEFAULT_MTU];
         let mut wbuf = BytesMut::with_capacity(DEFAULT_MTU);
         let mut await_confirmations = VecDeque::new();
@@ -218,10 +213,11 @@ impl Connection {
                     match maybe_packet? {
                         pkt::Packet::ExchangeMtuRequest(item) => {
                             let response = response::<pkt::ExchangeMtuRequest>(
-                                handler.handle_exchange_mtu_request(&item))?;
+                                handler.handle_exchange_mtu_request(&item), mtu);
                             if let pkt::Packet::ExchangeMtuResponse(response) = &response {
                                 let client_rx_mtu = item.client_rx_mtu().clone() as usize;
                                 let server_rx_mtu = response.server_rx_mtu().clone() as usize;
+                                mtu = server_rx_mtu;
                                 rbuf = vec![0; server_rx_mtu];
                                 wbuf = BytesMut::with_capacity(client_rx_mtu);
                             };
@@ -230,66 +226,63 @@ impl Connection {
 
                         pkt::Packet::FindInformationRequest(item) => {
                             let response = response::<pkt::FindInformationRequest>(
-                                handler.handle_find_information_request(&item))?;
+                                handler.handle_find_information_request(&item), mtu);
                             send(&sock, &mut wbuf, response).await?;
                         }
 
                         pkt::Packet::FindByTypeValueRequest(item) => {
                             let response = response::<pkt::FindByTypeValueRequest>(
-                                handler.handle_find_by_type_value_request(&item))?;
+                                handler.handle_find_by_type_value_request(&item), mtu);
                             send(&sock, &mut wbuf, response).await?;
                         }
 
                         pkt::Packet::ReadByTypeRequest(item) => {
                             let response = response::<pkt::ReadByTypeRequest>(
-                                handler.handle_read_by_type_request(&item))?;
+                                handler.handle_read_by_type_request(&item), mtu);
                             send(&sock, &mut wbuf, response).await?;
                         }
 
                         pkt::Packet::ReadRequest(item) => {
                             let response = response::<pkt::ReadRequest>(
-                                handler.handle_read_request(&item))?;
+                                handler.handle_read_request(&item), mtu);
                             send(&sock, &mut wbuf, response).await?;
                         }
 
                         pkt::Packet::ReadBlobRequest(item) => {
                             let response = response::<pkt::ReadBlobRequest>(
-                                handler.handle_read_blob_request(&item))?;
+                                handler.handle_read_blob_request(&item), mtu);
                             send(&sock, &mut wbuf, response).await?;
                         }
 
                         pkt::Packet::ReadMultipleRequest(item) => {
                             let response = response::<pkt::ReadMultipleRequest>(
-                                handler.handle_read_multiple_request(&item))?;
+                                handler.handle_read_multiple_request(&item), mtu);
                             send(&sock, &mut wbuf, response).await?;
                         }
 
                         pkt::Packet::ReadByGroupTypeRequest(item) => {
                             let response = response::<pkt::ReadByGroupTypeRequest>(
-                                handler.handle_read_by_group_type_request(&item))?;
+                                handler.handle_read_by_group_type_request(&item), mtu);
                             send(&sock, &mut wbuf, response).await?;
                         }
 
                         pkt::Packet::WriteRequest(item) => {
                             let response = response::<pkt::WriteRequest>(
-                                handler.handle_write_request(&item))?;
+                                handler.handle_write_request(&item), mtu);
                             send(&sock, &mut wbuf, response).await?;
                         }
 
-                        pkt::Packet::WriteCommand(item) => {
-                            handler.handle_write_command(&item)
-                                .map_err(|e| RunError::Handler(Box::new(e)))?;
-                            }
+                        pkt::Packet::WriteCommand(item) => handler.handle_write_command(&item),
 
                         pkt::Packet::PrepareWriteRequest(item) => {
                             let response = response::<pkt::PrepareWriteRequest>(
-                                handler.handle_prepare_write_request(&item))?;
+                                handler.handle_prepare_write_request(&item), mtu);
                             send(&sock, &mut wbuf, response).await?;
                         }
 
                         pkt::Packet::ExecuteWriteRequest(item) => {
                             let response = response::<pkt::ExecuteWriteRequest>(
-                                handler.handle_execute_write_request(&item))?;
+                                handler.handle_execute_write_request(&item), mtu);
                             send(&sock, &mut wbuf, response).await?;
                         }
 
@@ -299,10 +292,7 @@ impl Connection {
                             }
                         }
 
-                        pkt::Packet::SignedWriteCommand(item) => {
-                            handler.handle_signed_write_command(&item)
-                                .map_err(|e| RunError::Handler(Box::new(e)))?;
-                        }
+                        pkt::Packet::SignedWriteCommand(item) => handler.handle_signed_write_command(&item),
 
                         e => unreachable!("{:?}", e),
                     }
@@ -320,19 +310,12 @@ pub struct Server {
 impl Server {
     pub fn new() -> io::Result<Self> {
         let sock = AttListener::new()?;
-        Ok(Self {
-            sock,
-        })
+        Ok(Self { sock })
     }
 
     pub async fn accept(&self) -> io::Result<Connection> {
         let (sock, addr) = self.sock.accept().await?;
         let (tx, rx) = mpsc::unbounded_channel();
-        Ok(Connection {
-            sock,
-            addr,
-            tx,
-            rx,
-        })
+        Ok(Connection { sock, addr, tx, rx })
     }
 }

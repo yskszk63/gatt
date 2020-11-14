@@ -1,4 +1,4 @@
-use std::iter::{ Extend, FromIterator};
+use std::iter::{Extend, FromIterator};
 
 use super::*;
 

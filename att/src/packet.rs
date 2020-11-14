@@ -1,16 +1,17 @@
-use std::fmt;
 use std::convert::TryFrom;
+use std::fmt;
 
 use bytes::{Buf, Bytes, BytesMut};
-pub use uuid::Uuid as Uuid128;
 use derive_new::new as New;
 use getset::Getters;
+pub use uuid::Uuid as Uuid128;
 
-use crate::pack::{Pack, Unpack, Error as UnpackError};
+use crate::pack::{Error as UnpackError, Pack, Unpack};
+use crate::size::Size;
 
 mod impl_from_iter;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ErrorCode {
     InvalidHandle,
     ReadNotPermitted,
@@ -58,9 +59,9 @@ impl Pack for ErrorCode {
             Self::InsufficientResources => 0x11,
             Self::DatabaseOutOfSync => 0x12,
             Self::ValueNotAllowed => 0x13,
-            Self::ApplicationError(v) |
-            Self::CommonProfileAndServiceErrorCodes(v) |
-            Self::ReservedForFutureUse(v) => v,
+            Self::ApplicationError(v)
+            | Self::CommonProfileAndServiceErrorCodes(v)
+            | Self::ReservedForFutureUse(v) => v,
         };
         u8::pack(v, buf);
     }
@@ -100,6 +101,16 @@ packable_newtype! {
     pub struct Handle(u16);
 }
 
+impl Handle {
+    pub const fn new(v: u16) -> Self {
+        Self(v)
+    }
+
+    pub fn as_u16(&self) -> u16 {
+        self.0
+    }
+}
+
 impl fmt::Debug for Handle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "0x{:04X}", self.0)
@@ -119,8 +130,18 @@ impl From<Handle> for u16 {
 }
 
 packable_newtype! {
-    #[derive(Clone)]
+    #[derive(Clone, PartialEq, Eq)]
     pub struct Uuid16(u16);
+}
+
+impl Uuid16 {
+    pub const fn new(v: u16) -> Self {
+        Self(v)
+    }
+
+    pub fn as_u16(&self) -> u16 {
+        self.0
+    }
 }
 
 impl From<u16> for Uuid16 {
@@ -165,10 +186,20 @@ impl From<Uuid128> for Uuid {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Uuid {
     Uuid16(Uuid16),
     Uuid128(Uuid128),
+}
+
+impl Uuid {
+    pub const fn new_uuid16(v: u16) -> Self {
+        Self::Uuid16(Uuid16::new(v))
+    }
+
+    pub const fn new_uuid128(v: u128) -> Self {
+        Self::Uuid128(Uuid128::from_u128(v))
+    }
 }
 
 impl Pack for Uuid {
@@ -206,10 +237,7 @@ impl Unpack for HandlesInformationList {
     fn unpack<B: Buf>(buf: &mut B) -> Result<Self, UnpackError> {
         let mut v = vec![];
         while buf.has_remaining() {
-            v.push((
-                Unpack::unpack(buf)?,
-                Unpack::unpack(buf)?,
-            ))
+            v.push((Unpack::unpack(buf)?, Unpack::unpack(buf)?))
         }
         Ok(Self(v))
     }
@@ -217,6 +245,14 @@ impl Unpack for HandlesInformationList {
 
 #[derive(Debug)]
 pub struct SetOfHandles(Vec<Handle>);
+
+impl<'a> IntoIterator for &'a SetOfHandles {
+    type Item = &'a Handle;
+    type IntoIter = std::slice::Iter<'a, Handle>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
 
 impl Pack for SetOfHandles {
     fn pack(self, buf: &mut BytesMut) {
@@ -230,9 +266,7 @@ impl Unpack for SetOfHandles {
     fn unpack<B: Buf>(buf: &mut B) -> Result<Self, UnpackError> {
         let mut v = vec![];
         while buf.has_remaining() {
-            v.push(
-                Unpack::unpack(buf)?,
-            )
+            v.push(Unpack::unpack(buf)?)
         }
         Ok(Self(v))
     }
@@ -279,18 +313,22 @@ impl Unpack for AttributeDataList<(Handle, Uuid)> {
         let len = match format {
             0x01 => 4,
             0x02 => 24,
-            v => return Err(UnpackError::Unexpected(format!("unexpected format {}", v)))
+            v => return Err(UnpackError::Unexpected(format!("unexpected format {}", v))),
         };
-        Ok(Self((0..buf.remaining() / len).map(|_| {
-            Ok((
-                Unpack::unpack(buf)?,
-                match format {
-                    0x01 => Uuid::Uuid16(Unpack::unpack(buf)?),
-                    0x02 => Uuid::Uuid128(Unpack::unpack(buf)?),
-                    x => unreachable!(x),
-                }
-            ))
-        }).collect::<Result<_, _>>()?))
+        Ok(Self(
+            (0..buf.remaining() / len)
+                .map(|_| {
+                    Ok((
+                        Unpack::unpack(buf)?,
+                        match format {
+                            0x01 => Uuid::Uuid16(Unpack::unpack(buf)?),
+                            0x02 => Uuid::Uuid128(Unpack::unpack(buf)?),
+                            x => unreachable!(x),
+                        },
+                    ))
+                })
+                .collect::<Result<_, _>>()?,
+        ))
     }
 }
 
@@ -324,12 +362,11 @@ impl Pack for AttributeDataList<(Handle, Bytes)> {
 impl Unpack for AttributeDataList<(Handle, Bytes)> {
     fn unpack<B: Buf>(buf: &mut B) -> Result<Self, UnpackError> {
         let len = u8::unpack(buf)? as usize;
-        Ok(Self((0..buf.remaining() / len).map(|_| {
-            Ok((
-                Unpack::unpack(buf)?,
-                buf.copy_to_bytes(len - 2),
-            ))
-        }).collect::<Result<_, _>>()?))
+        Ok(Self(
+            (0..buf.remaining() / len)
+                .map(|_| Ok((Unpack::unpack(buf)?, buf.copy_to_bytes(len - 2))))
+                .collect::<Result<_, _>>()?,
+        ))
     }
 }
 
@@ -364,13 +401,17 @@ impl Pack for AttributeDataList<(Handle, Handle, Bytes)> {
 impl Unpack for AttributeDataList<(Handle, Handle, Bytes)> {
     fn unpack<B: Buf>(buf: &mut B) -> Result<Self, UnpackError> {
         let len = u8::unpack(buf)? as usize;
-        Ok(Self((0..buf.remaining() / len).map(|_| {
-            Ok((
-                Unpack::unpack(buf)?,
-                Unpack::unpack(buf)?,
-                buf.copy_to_bytes(len - 4),
-            ))
-        }).collect::<Result<_, _>>()?))
+        Ok(Self(
+            (0..buf.remaining() / len)
+                .map(|_| {
+                    Ok((
+                        Unpack::unpack(buf)?,
+                        Unpack::unpack(buf)?,
+                        buf.copy_to_bytes(len - 4),
+                    ))
+                })
+                .collect::<Result<_, _>>()?,
+        ))
     }
 }
 
@@ -561,14 +602,15 @@ packet! {
         attribute_value: Bytes,
     }
 
-    #[derive(Debug, New)]
+    #[derive(Debug, New, Getters)]
+    #[get = "pub"]
     pub struct ReadMultipleRequest: 0x0E {
         set_of_handles: SetOfHandles,
     }
 
     #[derive(Debug, New)]
     pub struct ReadMultipleResponse: 0x0F {
-        set_of_values: Bytes,
+        set_of_values: Bytes, // FIXME
     }
 
     #[derive(Debug, New, Getters)]
@@ -660,7 +702,9 @@ pub trait Request: seal::Sealed {
     type Response: Response;
 }
 
-pub trait Response: seal::Sealed {}
+pub trait Response: seal::Sealed {
+    fn truncate(&mut self, mtu: usize);
+}
 
 pub trait Command: seal::Sealed {}
 
@@ -672,46 +716,150 @@ pub trait Indication: seal::Sealed {
 
 pub trait Confirmation: seal::Sealed {}
 
-impl Response for ErrorResponse {}
+impl Response for ErrorResponse {
+    fn truncate(&mut self, _: usize) {}
+}
 
-impl Request for ExchangeMtuRequest { type Response = ExchangeMtuResponse; }
-impl Response for ExchangeMtuResponse {}
+impl Request for ExchangeMtuRequest {
+    type Response = ExchangeMtuResponse;
+}
+impl Response for ExchangeMtuResponse {
+    fn truncate(&mut self, _: usize) {}
+}
 
-impl Request for FindInformationRequest { type Response = FindInformationResponse; }
-impl Response for FindInformationResponse {}
+impl Request for FindInformationRequest {
+    type Response = FindInformationResponse;
+}
+impl Response for FindInformationResponse {
+    fn truncate(&mut self, mtu: usize) {
+        let mut remaining = mtu - 2;
+        let mut len = 0;
+        for item in &self.values.0 {
+            let item_len = item.size();
+            if item_len > remaining {
+                break;
+            }
+            remaining -= item_len;
+            len += 1;
+        }
+        self.values.0.truncate(len);
+    }
+}
 
-impl Request for FindByTypeValueRequest { type Response = FindByTypeValueResponse; }
-impl Response for FindByTypeValueResponse {}
+impl Request for FindByTypeValueRequest {
+    type Response = FindByTypeValueResponse;
+}
+impl Response for FindByTypeValueResponse {
+    fn truncate(&mut self, mtu: usize) {
+        let mut remaining = mtu - 1;
+        let mut len = 0;
+        for item in &self.values.0 {
+            let item_len = item.size();
+            if item_len > remaining {
+                break;
+            }
+            remaining -= item_len;
+            len += 1;
+        }
+        self.values.0.truncate(len);
+    }
+}
 
-impl Request for ReadByTypeRequest { type Response = ReadByTypeResponse; }
-impl Response for ReadByTypeResponse {}
+impl Request for ReadByTypeRequest {
+    type Response = ReadByTypeResponse;
+}
+impl Response for ReadByTypeResponse {
+    fn truncate(&mut self, mtu: usize) {
+        let mut remaining = mtu - 2;
+        let mut len = 0;
+        for item in &self.values.0 {
+            let item_len = item.size();
+            if item_len > remaining {
+                break;
+            }
+            remaining -= item_len;
+            len += 1;
+        }
+        self.values.0.truncate(len);
+    }
+}
 
-impl Request for ReadRequest { type Response = ReadResponse; }
-impl Response for ReadResponse {}
+impl Request for ReadRequest {
+    type Response = ReadResponse;
+}
+impl Response for ReadResponse {
+    fn truncate(&mut self, mtu: usize) {
+        self.attribute_value.truncate(mtu - 1);
+    }
+}
 
-impl Request for ReadBlobRequest { type Response = ReadBlobResponse; }
-impl Response for ReadBlobResponse {}
+impl Request for ReadBlobRequest {
+    type Response = ReadBlobResponse;
+}
+impl Response for ReadBlobResponse {
+    fn truncate(&mut self, mtu: usize) {
+        self.attribute_value.truncate(mtu - 1);
+    }
+}
 
-impl Request for ReadMultipleRequest { type Response = ReadMultipleResponse; }
-impl Response for ReadMultipleResponse {}
+impl Request for ReadMultipleRequest {
+    type Response = ReadMultipleResponse;
+}
+impl Response for ReadMultipleResponse {
+    fn truncate(&mut self, mtu: usize) {
+        self.set_of_values.truncate(mtu - 1);
+    }
+}
 
-impl Request for ReadByGroupTypeRequest { type Response = ReadByGroupTypeResponse; }
-impl Response for ReadByGroupTypeResponse {}
+impl Request for ReadByGroupTypeRequest {
+    type Response = ReadByGroupTypeResponse;
+}
+impl Response for ReadByGroupTypeResponse {
+    fn truncate(&mut self, mtu: usize) {
+        let mut remaining = mtu - 2;
+        let mut len = 0;
+        for item in &self.values.0 {
+            let item_len = item.size();
+            if item_len > remaining {
+                break;
+            }
+            remaining -= item_len;
+            len += 1;
+        }
+        self.values.0.truncate(len);
+    }
+}
 
-impl Request for WriteRequest { type Response = WriteResponse; }
-impl Response for WriteResponse {}
+impl Request for WriteRequest {
+    type Response = WriteResponse;
+}
+impl Response for WriteResponse {
+    fn truncate(&mut self, _: usize) {}
+}
 
 impl Command for WriteCommand {}
 
-impl Request for PrepareWriteRequest { type Response = PrepareWriteResponse; }
-impl Response for PrepareWriteResponse {}
+impl Request for PrepareWriteRequest {
+    type Response = PrepareWriteResponse;
+}
+impl Response for PrepareWriteResponse {
+    fn truncate(&mut self, mtu: usize) {
+        self.part_attribute_value.truncate(mtu);
+    }
+}
 
-impl Request for ExecuteWriteRequest { type Response = ExecuteWriteResponse; }
-impl Response for ExecuteWriteResponse {}
+impl Request for ExecuteWriteRequest {
+    type Response = ExecuteWriteResponse;
+}
+impl Response for ExecuteWriteResponse {
+    fn truncate(&mut self, _: usize) {}
+}
 
 impl Notificaion for HandleValueNotification {}
 
-impl Indication for HandleValueIndication { type Confirmation = HandleValueConfirmation; }
+impl Indication for HandleValueIndication {
+    type Confirmation = HandleValueConfirmation;
+}
 impl Confirmation for HandleValueConfirmation {}
 
 impl Command for SignedWriteCommand {}
@@ -722,6 +870,7 @@ mod tests {
 
     #[test]
     fn test_object_safety() {
+        #[allow(dead_code)]
         fn foo(_: &dyn Request<Response = dyn Response>) {}
     }
 }

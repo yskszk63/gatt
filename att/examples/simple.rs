@@ -7,20 +7,43 @@ use att::server::*;
 
 struct H;
 
+/*
+ * 0x0001 Uuid16(0x1800) Generic Access
+ * 0x0002 Write, 0x0004, Uuid16(0x2A00) Device Name
+ * 0x0003 Read, 0x0005, Uuid16(0x2A01) Appearance
+ * 0x0004 ...
+ * 0x0005 ...
+ * 0x000C Uuid16(0x1801) Generic Attribute
+ * 0x000D Indication, 0x000E, Uuid16(0x2A05) ServiceChanged
+ * 0x000E ...
+ * 0x000F Uuid16(0x2902) Client Characteristic Configuration
+ * 0x0010 Uuid16(0x180A) Device Information
+ * 0x0011 Read, 0x0012, Uuid16(0x2A29) Manufacture Name String
+ * 0x0012 ...
+ * 0x0013 Read, 0x0014, Uuid16(0x2A24) Model Number String
+ * 0x0014 ...
+ * 0x0015 Read, 0x0016, Uuid16(0x2A25) Serial Number String
+ * 0x0016 ...
+ * 0x0023 Uuid16(0x180F) Battery Service
+ * 0x0024 Read | Notification, 0x0025, Uuid16(0x2A19) Battery Level
+ * 0x0025 ...
+ * 0x0026 Uuid16(0x2902) Client Characteristic Configuration
+ * 0x0027 Uuid16(0x2904) Client Presentation Format Descriptor
+ */
+
 #[allow(unused_variables)]
 impl Handler for H {
     fn handle_exchange_mtu_request(
         &mut self,
         item: &pkt::ExchangeMtuRequest,
-    ) -> RequestResult<pkt::ExchangeMtuResponse> {
-        Err(anyhow::anyhow!("OK"))?;
+    ) -> Result<pkt::ExchangeMtuResponse, ErrorResponse> {
         Ok(pkt::ExchangeMtuResponse::new(item.client_rx_mtu().clone()))
     }
 
     fn handle_find_information_request(
         &mut self,
         item: &pkt::FindInformationRequest,
-    ) -> RequestResult<pkt::FindInformationResponse> {
+    ) -> Result<pkt::FindInformationResponse, ErrorResponse> {
         match (
             item.starting_handle().clone().into(),
             item.ending_handle().clone().into(),
@@ -46,21 +69,24 @@ impl Handler for H {
                 .into_iter()
                 .collect())
             }
-            (x, _) => Err((x.clone().into(), pkt::ErrorCode::AttributeNotFound).into()),
+            (x, _) => Err(ErrorResponse::new(
+                x.clone().into(),
+                pkt::ErrorCode::AttributeNotFound,
+            )),
         }
     }
 
     fn handle_find_by_type_value_request(
         &mut self,
         item: &pkt::FindByTypeValueRequest,
-    ) -> RequestResult<pkt::FindByTypeValueResponse> {
+    ) -> Result<pkt::FindByTypeValueResponse, ErrorResponse> {
         todo!()
     }
 
     fn handle_read_by_type_request(
         &mut self,
         item: &pkt::ReadByTypeRequest,
-    ) -> RequestResult<pkt::ReadByTypeResponse> {
+    ) -> Result<pkt::ReadByTypeResponse, ErrorResponse> {
         match (
             item.starting_handle().clone().into(),
             item.ending_handle().clone().into(),
@@ -97,11 +123,17 @@ impl Handler for H {
                 .into_iter()
                 .collect())
             }
-            (x, _, _) => Err((x.into(), pkt::ErrorCode::AttributeNotFound).into()),
+            (x, _, _) => Err(ErrorResponse::new(
+                x.clone().into(),
+                pkt::ErrorCode::AttributeNotFound,
+            )),
         }
     }
 
-    fn handle_read_request(&mut self, item: &pkt::ReadRequest) -> RequestResult<pkt::ReadResponse> {
+    fn handle_read_request(
+        &mut self,
+        item: &pkt::ReadRequest,
+    ) -> Result<pkt::ReadResponse, ErrorResponse> {
         match item.attribute_handle().clone().into() {
             0x0005 => Ok(pkt::ReadResponse::new(vec![0x00].into())),
             _ => Ok(pkt::ReadResponse::new(vec![0x00].into())),
@@ -112,21 +144,21 @@ impl Handler for H {
     fn handle_read_blob_request(
         &mut self,
         item: &pkt::ReadBlobRequest,
-    ) -> RequestResult<pkt::ReadBlobResponse> {
+    ) -> Result<pkt::ReadBlobResponse, ErrorResponse> {
         todo!()
     }
 
     fn handle_read_multiple_request(
         &mut self,
         item: &pkt::ReadMultipleRequest,
-    ) -> RequestResult<pkt::ReadMultipleResponse> {
+    ) -> Result<pkt::ReadMultipleResponse, ErrorResponse> {
         todo!()
     }
 
     fn handle_read_by_group_type_request(
         &mut self,
         item: &pkt::ReadByGroupTypeRequest,
-    ) -> RequestResult<pkt::ReadByGroupTypeResponse> {
+    ) -> Result<pkt::ReadByGroupTypeResponse, ErrorResponse> {
         match (
             item.starting_handle().clone().into(),
             item.ending_handle().clone().into(),
@@ -147,36 +179,39 @@ impl Handler for H {
                 .into_iter()
                 .collect())
             }
-            (x, _) => Err((x.into(), pkt::ErrorCode::AttributeNotFound).into()),
+            (x, _) => Err(ErrorResponse::new(
+                x.clone().into(),
+                pkt::ErrorCode::AttributeNotFound,
+            )),
         }
     }
 
     fn handle_write_request(
         &mut self,
         item: &pkt::WriteRequest,
-    ) -> RequestResult<pkt::WriteResponse> {
+    ) -> Result<pkt::WriteResponse, ErrorResponse> {
         Ok(pkt::WriteResponse::default())
     }
 
-    fn handle_write_command(&mut self, item: &pkt::WriteCommand) -> CommandResult<()> {
+    fn handle_write_command(&mut self, item: &pkt::WriteCommand) {
         todo!()
     }
 
     fn handle_prepare_write_request(
         &mut self,
         item: &pkt::PrepareWriteRequest,
-    ) -> RequestResult<pkt::PrepareWriteResponse> {
+    ) -> Result<pkt::PrepareWriteResponse, ErrorResponse> {
         todo!()
     }
 
     fn handle_execute_write_request(
         &mut self,
         item: &pkt::ExecuteWriteRequest,
-    ) -> RequestResult<pkt::ExecuteWriteResponse> {
+    ) -> Result<pkt::ExecuteWriteResponse, ErrorResponse> {
         todo!()
     }
 
-    fn handle_signed_write_command(&mut self, item: &pkt::SignedWriteCommand) -> CommandResult<()> {
+    fn handle_signed_write_command(&mut self, item: &pkt::SignedWriteCommand) {
         todo!()
     }
 }

@@ -1,0 +1,18 @@
+[package]
+name = "gatt"
+version = "0.1.0"
+authors = ["yskszk63 <yskszk63@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+att = { path = "../att/" }
+bitflags = "1.2"
+bytes = "0.6"
+thiserror = "1.0"
+tokio = { version = "0.3", features = ["sync"] }
+
+[dev-dependencies]
+tokio = { version = "0.3", features = ["rt", "macros"] }
+anyhow = "1.0"

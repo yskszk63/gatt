@@ -1,12 +1,12 @@
+use std::future::Future;
 use std::io;
 use std::mem::{self, MaybeUninit};
-use std::ptr;
 use std::pin::Pin;
+use std::ptr;
 use std::task::{Context, Poll};
-use std::future::Future;
 
-use tokio::io::unix::AsyncFd;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use tokio::io::unix::AsyncFd;
 
 // <bluetooth/bluetooth.h>
 const BTPROTO_L2CAP: libc::c_int = 0;
@@ -69,7 +69,7 @@ macro_rules! ready {
             Poll::Pending => return Poll::Pending,
             Poll::Ready(e) => e,
         }
-    }
+    };
 }
 
 fn is_wouldblock(err: &io::Error) -> bool {
@@ -88,12 +88,16 @@ fn sock_bind(sock: &Socket, cid: libc::c_ushort) -> io::Result<()> {
         l2_family: (libc::AF_BLUETOOTH as libc::sa_family_t),
         l2_psm: Default::default(),
         l2_cid: cid.to_le(),
-        l2_bdaddr: bdaddr_t{ b: [0; 6] },
+        l2_bdaddr: bdaddr_t { b: [0; 6] },
         l2_bdaddr_type: BDADDR_LE_PUBLIC,
-    }.into();
+    }
+    .into();
 
     let addr = unsafe {
-        SockAddr::from_raw_parts(&addr as *const _, mem::size_of::<sockaddr_l2>() as libc::socklen_t)
+        SockAddr::from_raw_parts(
+            &addr as *const _,
+            mem::size_of::<sockaddr_l2>() as libc::socklen_t,
+        )
     };
     sock.bind(&addr)?;
     Ok(())
@@ -116,9 +120,7 @@ impl<'a, 'b> Future for Recv<'a, 'b> {
             match inner.get_ref().recv(buf) {
                 Err(e) if is_wouldblock(&e) => guard.clear_ready(),
                 Err(e) => return Poll::Ready(Err(e)),
-                Ok(ret) => {
-                    return Poll::Ready(Ok(ret))
-                }
+                Ok(ret) => return Poll::Ready(Ok(ret)),
             }
         }
     }
@@ -141,9 +143,7 @@ impl<'a, 'b> Future for Send<'a, 'b> {
             match inner.get_ref().send(buf) {
                 Err(e) if is_wouldblock(&e) => guard.clear_ready(),
                 Err(e) => return Poll::Ready(Err(e)),
-                Ok(ret) => {
-                    return Poll::Ready(Ok(ret))
-                }
+                Ok(ret) => return Poll::Ready(Ok(ret)),
             }
         }
     }
@@ -190,8 +190,10 @@ impl<'a> Future for Accept<'a> {
                     let addr = unsafe { sockaddr_l2::try_from(addr) };
                     let addr = crate::Address::new(addr.unwrap().l2_bdaddr.b); // FIXME
                     sock.set_nonblocking(true)?;
-                    let sock = AttStream { inner: AsyncFd::new(sock)? };
-                    return Poll::Ready(Ok((sock, addr)))
+                    let sock = AttStream {
+                        inner: AsyncFd::new(sock)?,
+                    };
+                    return Poll::Ready(Ok((sock, addr)));
                 }
             }
         }
@@ -214,8 +216,6 @@ impl AttListener {
     }
 
     pub(crate) fn accept(&self) -> Accept {
-        Accept {
-            inner: &self.inner,
-        }
+        Accept { inner: &self.inner }
     }
 }
