@@ -209,12 +209,12 @@ pub struct Connection {
 async fn recv(sock: &AttStream, buf: &mut Vec<u8>) -> Result<pkt::Packet, RunError> {
     let len = sock.recv(buf).await?;
     let packet = pkt::Packet::unpack(&mut &buf[..len])?;
-    println!("<< {:?}", packet);
+    log::debug!("<< {:?}", packet);
     Ok(packet)
 }
 
 async fn send(sock: &AttStream, buf: &mut BytesMut, packet: pkt::Packet) -> Result<(), RunError> {
-    println!(">> {:?}", packet);
+    log::debug!(">> {:?}", packet);
     packet.pack(buf);
     sock.send(buf).await?;
     buf.clear();
@@ -275,8 +275,8 @@ impl Connection {
                             let response = response::<pkt::ExchangeMtuRequest>(
                                 handler.handle_exchange_mtu_request(&item), mtu);
                             if let pkt::Packet::ExchangeMtuResponse(response) = &response {
-                                let client_rx_mtu = item.client_rx_mtu().clone() as usize;
-                                let server_rx_mtu = response.server_rx_mtu().clone() as usize;
+                                let client_rx_mtu = *item.client_rx_mtu() as usize;
+                                let server_rx_mtu = *response.server_rx_mtu() as usize;
                                 mtu = server_rx_mtu;
                                 rbuf = vec![0; server_rx_mtu];
                                 wbuf = BytesMut::with_capacity(client_rx_mtu);

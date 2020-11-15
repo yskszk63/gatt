@@ -14,6 +14,7 @@ pub(crate) struct Database {
 }
 
 impl Database {
+    #[allow(clippy::type_complexity)]
     pub(crate) fn read_by_group_type(
         &self,
         range: RangeInclusive<Handle>,

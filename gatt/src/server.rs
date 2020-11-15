@@ -129,14 +129,13 @@ where
                 .ok();
         }
 
-        match self.db.write(
+        if let Err(err) = self.db.write(
             item.attribute_handle(),
             item.attribute_value(),
             false,
             false,
         ) {
-            Ok(_) => {}
-            Err(_) => {} // FIXME ignore
+            log::warn!("{:?}", err);
         };
     }
 
@@ -148,12 +147,11 @@ where
                 .ok();
         }
 
-        match self
-            .db
-            .write(item.attribute_handle(), item.attribute_value(), false, true)
+        if let Err(err) =
+            self.db
+                .write(item.attribute_handle(), item.attribute_value(), false, true)
         {
-            Ok(_) => {}
-            Err(_) => {} // FIXME ignore
+            log::warn!("{:?}", err);
         };
     }
 }

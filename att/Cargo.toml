@@ -15,6 +15,7 @@ thiserror = "1.0"
 uuid = "0.8"
 derive-new = "0.5"
 getset = "0.1"
+log = "0.4"
 
 [dev-dependencies]
 anyhow = "1.0"

@@ -64,10 +64,13 @@ pub struct Registration<T> {
     notify_or_indicate_handles: HashMap<T, Handle>,
 }
 
-impl<T> Registration<T>
-where
-    T: Hash + Eq + Clone,
-{
+impl<T> Default for Registration<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> Registration<T> {
     pub fn new() -> Self {
         Self {
             next_handle: 0x0001,
@@ -76,7 +79,12 @@ where
             notify_or_indicate_handles: HashMap::new(),
         }
     }
+}
 
+impl<T> Registration<T>
+where
+    T: Hash + Eq + Clone,
+{
     fn next_handle(&mut self) -> Handle {
         let result = Handle::new(self.next_handle);
         self.next_handle += 1;

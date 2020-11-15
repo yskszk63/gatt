@@ -60,6 +60,8 @@ async fn main() -> anyhow::Result<()> {
     use std::io::stdin;
     use tokio::task::spawn_blocking;
 
+    env_logger::init();
+
     let server = Server::bind()?;
     let connection = server.accept().await?;
     let (task, outgoing, mut events) = connection.run(new_registration());
