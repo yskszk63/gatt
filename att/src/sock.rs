@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::io;
 use std::mem::{self, MaybeUninit};
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::pin::Pin;
 use std::ptr;
 use std::task::{Context, Poll};
@@ -12,12 +13,27 @@ use tokio::io::unix::AsyncFd;
 const BTPROTO_L2CAP: libc::c_int = 0;
 const BDADDR_LE_PUBLIC: u8 = 0x01;
 //const BDADDR_LE_RANDOM: u8 = 0x02;
+const SOL_BLUETOOTH: libc::c_int = 274;
+const BT_SECURITY: libc::c_int = 4;
+//pub(crate) const BT_SECURITY_SDP: u8 = 0;
+//pub(crate) const BT_SECURITY_LOW: u8 = 1;
+pub(crate) const BT_SECURITY_MEDIUM: u8 = 2;
+pub(crate) const BT_SECURITY_HIGH: u8 = 3;
+//pub(crate) const BT_SECURITY_FIPS: u8 = 4;
 
 #[repr(C)]
 #[derive(Debug)]
 #[allow(non_camel_case_types)]
 struct bdaddr_t {
     b: [u8; 6],
+}
+
+#[repr(C)]
+#[derive(Debug)]
+#[allow(non_camel_case_types)]
+struct bt_security {
+    level: u8,
+    key_size: u8,
 }
 
 // <bluetooth/l2cap.h>
@@ -101,6 +117,27 @@ fn sock_bind(sock: &Socket, cid: libc::c_ushort) -> io::Result<()> {
     };
     sock.bind(&addr)?;
     Ok(())
+}
+
+fn set_sockopt_bt_security(fd: RawFd, level: u8, key_size: u8) -> io::Result<()> {
+    let opt = bt_security { level, key_size };
+    let len = mem::size_of::<bt_security>() as libc::socklen_t;
+
+    let r = unsafe {
+        libc::setsockopt(
+            fd,
+            SOL_BLUETOOTH,
+            BT_SECURITY,
+            &opt as *const _ as *const libc::c_void,
+            len,
+        )
+    };
+
+    if r < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -213,6 +250,10 @@ impl AttListener {
         Ok(Self {
             inner: AsyncFd::new(sock)?,
         })
+    }
+
+    pub(crate) fn set_sockopt_bt_security(&self, level: u8, key_size: u8) -> io::Result<()> {
+        set_sockopt_bt_security(self.inner.as_raw_fd(), level, key_size)
     }
 
     pub(crate) fn accept(&self) -> Accept {

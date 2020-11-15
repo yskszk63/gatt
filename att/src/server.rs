@@ -9,13 +9,14 @@ use crate::pack::{Error as UnpackError, Pack, Unpack};
 use crate::packet as pkt;
 use crate::packet::Response;
 use crate::sock::{AttListener, AttStream};
+use crate::Handle;
 
 #[derive(Debug, thiserror::Error)]
 #[error("error response {0:?} {1:?}")]
-pub struct ErrorResponse(pkt::Handle, pkt::ErrorCode);
+pub struct ErrorResponse(Handle, pkt::ErrorCode);
 
 impl ErrorResponse {
-    pub fn new(handle: pkt::Handle, code: pkt::ErrorCode) -> Self {
+    pub fn new(handle: Handle, code: pkt::ErrorCode) -> Self {
         Self(handle, code)
     }
 }
@@ -24,61 +25,120 @@ pub trait Handler {
     fn handle_exchange_mtu_request(
         &mut self,
         item: &pkt::ExchangeMtuRequest,
-    ) -> Result<pkt::ExchangeMtuResponse, ErrorResponse>;
+    ) -> Result<pkt::ExchangeMtuResponse, ErrorResponse> {
+        Ok(pkt::ExchangeMtuResponse::new(*item.client_rx_mtu()))
+    }
 
     fn handle_find_information_request(
         &mut self,
         item: &pkt::FindInformationRequest,
-    ) -> Result<pkt::FindInformationResponse, ErrorResponse>;
+    ) -> Result<pkt::FindInformationResponse, ErrorResponse> {
+        Err(ErrorResponse::new(
+            item.starting_handle().clone(),
+            pkt::ErrorCode::RequestNotSupported,
+        ))
+    }
 
     fn handle_find_by_type_value_request(
         &mut self,
         item: &pkt::FindByTypeValueRequest,
-    ) -> Result<pkt::FindByTypeValueResponse, ErrorResponse>;
+    ) -> Result<pkt::FindByTypeValueResponse, ErrorResponse> {
+        Err(ErrorResponse::new(
+            item.starting_handle().clone(),
+            pkt::ErrorCode::RequestNotSupported,
+        ))
+    }
 
     fn handle_read_by_type_request(
         &mut self,
         item: &pkt::ReadByTypeRequest,
-    ) -> Result<pkt::ReadByTypeResponse, ErrorResponse>;
+    ) -> Result<pkt::ReadByTypeResponse, ErrorResponse> {
+        Err(ErrorResponse::new(
+            item.starting_handle().clone(),
+            pkt::ErrorCode::RequestNotSupported,
+        ))
+    }
 
     fn handle_read_request(
         &mut self,
         item: &pkt::ReadRequest,
-    ) -> Result<pkt::ReadResponse, ErrorResponse>;
+    ) -> Result<pkt::ReadResponse, ErrorResponse> {
+        Err(ErrorResponse::new(
+            item.attribute_handle().clone(),
+            pkt::ErrorCode::RequestNotSupported,
+        ))
+    }
 
     fn handle_read_blob_request(
         &mut self,
         item: &pkt::ReadBlobRequest,
-    ) -> Result<pkt::ReadBlobResponse, ErrorResponse>;
+    ) -> Result<pkt::ReadBlobResponse, ErrorResponse> {
+        Err(ErrorResponse::new(
+            item.attribute_handle().clone(),
+            pkt::ErrorCode::RequestNotSupported,
+        ))
+    }
 
     fn handle_read_multiple_request(
         &mut self,
         item: &pkt::ReadMultipleRequest,
-    ) -> Result<pkt::ReadMultipleResponse, ErrorResponse>;
+    ) -> Result<pkt::ReadMultipleResponse, ErrorResponse> {
+        Err(ErrorResponse::new(
+            item.into_iter().next().unwrap().clone(),
+            pkt::ErrorCode::RequestNotSupported,
+        ))
+    }
 
     fn handle_read_by_group_type_request(
         &mut self,
         item: &pkt::ReadByGroupTypeRequest,
-    ) -> Result<pkt::ReadByGroupTypeResponse, ErrorResponse>;
+    ) -> Result<pkt::ReadByGroupTypeResponse, ErrorResponse> {
+        Err(ErrorResponse::new(
+            item.starting_handle().clone(),
+            pkt::ErrorCode::RequestNotSupported,
+        ))
+    }
 
     fn handle_write_request(
         &mut self,
         item: &pkt::WriteRequest,
-    ) -> Result<pkt::WriteResponse, ErrorResponse>;
+    ) -> Result<pkt::WriteResponse, ErrorResponse> {
+        Err(ErrorResponse::new(
+            item.attribute_handle().clone(),
+            pkt::ErrorCode::RequestNotSupported,
+        ))
+    }
 
-    fn handle_write_command(&mut self, item: &pkt::WriteCommand);
+    #[allow(unused_variables)]
+    fn handle_write_command(&mut self, item: &pkt::WriteCommand) {
+        // nop
+    }
 
     fn handle_prepare_write_request(
         &mut self,
         item: &pkt::PrepareWriteRequest,
-    ) -> Result<pkt::PrepareWriteResponse, ErrorResponse>;
+    ) -> Result<pkt::PrepareWriteResponse, ErrorResponse> {
+        Err(ErrorResponse::new(
+            item.attribute_handle().clone(),
+            pkt::ErrorCode::RequestNotSupported,
+        ))
+    }
 
+    #[allow(unused_variables)]
     fn handle_execute_write_request(
         &mut self,
         item: &pkt::ExecuteWriteRequest,
-    ) -> Result<pkt::ExecuteWriteResponse, ErrorResponse>;
+    ) -> Result<pkt::ExecuteWriteResponse, ErrorResponse> {
+        Err(ErrorResponse::new(
+            0x0000.into(),
+            pkt::ErrorCode::RequestNotSupported,
+        ))
+    }
 
-    fn handle_signed_write_command(&mut self, item: &pkt::SignedWriteCommand);
+    #[allow(unused_variables)]
+    fn handle_signed_write_command(&mut self, item: &pkt::SignedWriteCommand) {
+        // nop
+    }
 }
 
 #[derive(Debug)]
@@ -105,7 +165,7 @@ pub struct Outbound {
 }
 
 impl Outbound {
-    pub fn notify(&self, handle: pkt::Handle, value: Bytes) -> Result<(), NotifyError> {
+    pub fn notify(&self, handle: Handle, value: Bytes) -> Result<(), NotifyError> {
         self.tx
             .send(OutgoingMessage::Notification(
                 pkt::HandleValueNotification::new(handle, value),
@@ -114,7 +174,7 @@ impl Outbound {
         Ok(())
     }
 
-    pub async fn indicate(&self, handle: pkt::Handle, value: Bytes) -> Result<(), IndicateError> {
+    pub async fn indicate(&self, handle: Handle, value: Bytes) -> Result<(), IndicateError> {
         let (tx, rx) = oneshot::channel();
         self.tx
             .send(OutgoingMessage::Indication(
@@ -311,6 +371,16 @@ impl Server {
     pub fn new() -> io::Result<Self> {
         let sock = AttListener::new()?;
         Ok(Self { sock })
+    }
+
+    pub fn needs_bond(&self) -> io::Result<()> {
+        self.sock
+            .set_sockopt_bt_security(crate::sock::BT_SECURITY_MEDIUM, 0)
+    }
+
+    pub fn needs_bond_mitm(&self) -> io::Result<()> {
+        self.sock
+            .set_sockopt_bt_security(crate::sock::BT_SECURITY_HIGH, 0)
     }
 
     pub async fn accept(&self) -> io::Result<Connection> {

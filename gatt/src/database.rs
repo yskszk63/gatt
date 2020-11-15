@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::iter::FromIterator;
 use std::ops::RangeInclusive;
 
-use att::packet::{ErrorCode, Handle, Uuid};
+use att::packet::ErrorCode;
+use att::{Handle, Uuid};
 use bytes::Bytes;
 
 use crate::attribute::{Attribute, Error as AttrError};
@@ -223,7 +224,6 @@ mod tests {
     use crate::attribute::{
         CharacteristicProperties, ClientCharacteristicConfiguration, Permission,
     };
-    use att::packet::Uuid;
     use bytes::Bytes;
 
     #[test]

@@ -1,6 +1,7 @@
 use bytes::{Buf, Bytes, BytesMut};
 
-use att::packet::{Handle, Uuid, Uuid16};
+use att::uuid::Uuid16;
+use att::{Handle, Uuid};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
@@ -87,6 +88,7 @@ pub(crate) enum Attribute {
         uuid: Uuid,
     },
 
+    #[allow(dead_code)]
     Include {
         handle: Handle,
         included_service_handle: Handle,
@@ -113,6 +115,7 @@ pub(crate) enum Attribute {
         extended_properties: CharacteristicExtendedProperties,
     },
 
+    #[allow(dead_code)]
     CharacteristicUserDescription {
         handle: Handle,
         description: String,
@@ -131,6 +134,7 @@ pub(crate) enum Attribute {
         permission: Permission,
     },
 
+    #[allow(dead_code)]
     CharacteristicPresentationFormat {
         handle: Handle,
         format: u8,
@@ -140,6 +144,7 @@ pub(crate) enum Attribute {
         description: u16,
     },
 
+    #[allow(dead_code)]
     CharacteristicAggregateFormat {
         handle: Handle,
         attribute_handles: Vec<Handle>,
@@ -155,6 +160,7 @@ impl Attribute {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn new_secondary_service(handle: Handle, uuid: Uuid) -> Self {
         Self::Service {
             handle,
@@ -163,6 +169,7 @@ impl Attribute {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn new_include(
         handle: Handle,
         included_service_handle: Handle,
@@ -239,6 +246,7 @@ impl Attribute {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn new_characteristic_presentation_format(
         handle: Handle,
         format: u8,
@@ -257,6 +265,7 @@ impl Attribute {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn new_characteristic_aggregate_format(
         handle: Handle,
         attribute_handles: Vec<Handle>,

@@ -1,6 +1,6 @@
 use bytes::Bytes;
 
-use crate::packet::{Handle, Uuid};
+use crate::{Handle, Uuid};
 
 pub(crate) trait Size {
     fn size(&self) -> usize;

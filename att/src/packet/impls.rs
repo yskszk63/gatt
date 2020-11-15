@@ -57,3 +57,19 @@ impl Extend<(Handle, Handle, Bytes)> for ReadByGroupTypeResponse {
         self.values.0.extend(iter)
     }
 }
+
+impl IntoIterator for ReadMultipleRequest {
+    type Item = Handle;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.set_of_handles.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a ReadMultipleRequest {
+    type Item = &'a Handle;
+    type IntoIter = std::slice::Iter<'a, Handle>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.set_of_handles.into_iter()
+    }
+}

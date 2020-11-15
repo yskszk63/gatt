@@ -8,28 +8,27 @@ use att::server::{
     Connection as AttConnection, ErrorResponse, Handler, Outbound, RunError as AttRunError,
     Server as AttServer,
 };
+use att::Handle;
 use bytes::Bytes;
 use tokio::sync::mpsc;
 
 use crate::database::Database;
-pub use crate::registration::{CharacteristicProperties, Registration};
+use crate::Registration;
 
 #[derive(Debug)]
 struct GattHandler<T> {
-    mtu: usize,
     db: Database,
-    write_tokens: HashMap<pkt::Handle, T>,
+    write_tokens: HashMap<Handle, T>,
     events_tx: mpsc::UnboundedSender<Event<T>>,
 }
 
 impl<T> GattHandler<T> {
     fn new(
         db: Database,
-        write_tokens: HashMap<pkt::Handle, T>,
+        write_tokens: HashMap<Handle, T>,
         events_tx: mpsc::UnboundedSender<Event<T>>,
     ) -> Self {
         Self {
-            mtu: 23, // FIXME
             db,
             write_tokens,
             events_tx,
@@ -45,7 +44,6 @@ where
         &mut self,
         item: &pkt::ExchangeMtuRequest,
     ) -> Result<pkt::ExchangeMtuResponse, ErrorResponse> {
-        self.mtu = *item.client_rx_mtu() as usize;
         Ok(pkt::ExchangeMtuResponse::new(*item.client_rx_mtu()))
     }
 
@@ -61,16 +59,6 @@ where
             Err((h, e)) => return Err(ErrorResponse::new(h, e)),
         };
         Ok(r.into_iter().map(Into::into).collect())
-    }
-
-    fn handle_find_by_type_value_request(
-        &mut self,
-        item: &pkt::FindByTypeValueRequest,
-    ) -> Result<pkt::FindByTypeValueResponse, ErrorResponse> {
-        Err(ErrorResponse::new(
-            item.starting_handle().clone(),
-            pkt::ErrorCode::RequestNotSupported,
-        ))
     }
 
     fn handle_read_by_type_request(
@@ -98,26 +86,6 @@ where
             Err((h, e)) => return Err(ErrorResponse::new(h, e)),
         };
         Ok(pkt::ReadResponse::new(r))
-    }
-
-    fn handle_read_blob_request(
-        &mut self,
-        item: &pkt::ReadBlobRequest,
-    ) -> Result<pkt::ReadBlobResponse, ErrorResponse> {
-        Err(ErrorResponse::new(
-            item.attribute_handle().clone(),
-            pkt::ErrorCode::RequestNotSupported,
-        ))
-    }
-
-    fn handle_read_multiple_request(
-        &mut self,
-        item: &pkt::ReadMultipleRequest,
-    ) -> Result<pkt::ReadMultipleResponse, ErrorResponse> {
-        Err(ErrorResponse::new(
-            item.set_of_handles().into_iter().next().unwrap().clone(),
-            pkt::ErrorCode::RequestNotSupported,
-        ))
     }
 
     fn handle_read_by_group_type_request(
@@ -172,26 +140,6 @@ where
         };
     }
 
-    fn handle_prepare_write_request(
-        &mut self,
-        item: &pkt::PrepareWriteRequest,
-    ) -> Result<pkt::PrepareWriteResponse, ErrorResponse> {
-        Err(ErrorResponse::new(
-            item.attribute_handle().clone(),
-            pkt::ErrorCode::RequestNotSupported,
-        ))
-    }
-
-    fn handle_execute_write_request(
-        &mut self,
-        _item: &pkt::ExecuteWriteRequest,
-    ) -> Result<pkt::ExecuteWriteResponse, ErrorResponse> {
-        Err(ErrorResponse::new(
-            0x0000.into(),
-            pkt::ErrorCode::RequestNotSupported,
-        ))
-    }
-
     fn handle_signed_write_command(&mut self, item: &pkt::SignedWriteCommand) {
         let value = item.attribute_value();
         if let Some(token) = self.write_tokens.get(item.attribute_handle()) {
@@ -217,7 +165,7 @@ pub struct OutgoingError;
 #[derive(Debug)]
 pub struct Outgoing<T> {
     inner: Outbound,
-    token_map: HashMap<T, pkt::Handle>,
+    token_map: HashMap<T, Handle>,
 }
 
 impl<T> Outgoing<T>

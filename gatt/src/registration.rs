@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use att::packet::{Handle, Uuid};
+use att::{Handle, Uuid};
 use bytes::Bytes;
 
 use crate::attribute::{

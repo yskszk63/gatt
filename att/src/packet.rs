@@ -1,39 +1,66 @@
+//! ATT Protocol Packet
 use std::convert::TryFrom;
-use std::fmt;
 
 use bytes::{Buf, Bytes, BytesMut};
 use derive_new::new as New;
 use getset::Getters;
-pub use uuid::Uuid as Uuid128;
 
 use crate::pack::{Error as UnpackError, Pack, Unpack};
 use crate::size::Size;
+use crate::uuid::Uuid16;
+use crate::{Handle, Uuid};
 
-mod impl_from_iter;
+mod impls;
 
+/// ATT Error Response - Error Code
+///
+/// see BLUETOOTH CORE SPECIFICATION Version 5.1 |Vol 3, Part F
+///     Table 3.3: Error Codes
 #[derive(Debug, PartialEq, Eq)]
 pub enum ErrorCode {
+    /// Invalid Handle
     InvalidHandle,
+    /// Read Not Permitted
     ReadNotPermitted,
+    /// Write Not Permitted
     WriteNotPermitted,
+    /// Invalid PDU
     InvalidPDU,
+    /// Insufficient Authentication
     InsufficientAuthentication,
+    /// Request Not Supported
     RequestNotSupported,
+    /// Invalid Offset
     InvalidOffset,
+    /// Insufficient Authorization
     InsufficientAuthorization,
+    /// Prepare Queue Full
     PrepareQueueFull,
+    /// Attribute Not Found
     AttributeNotFound,
+    /// Attribute Not Long
     AttributeNotLong,
+    /// Insufficient Encryption Key Size
     InsufficientEncryptionKeySize,
+    /// Invalid Attribute Value Length
     InvalidAttributeValueLength,
+    /// Unlikely Error
     UnlikelyError,
+    /// Insufficient Encryption
     InsufficientEncryption,
+    /// Unsupported Group Type
     UnsupportedGroupType,
+    /// Insufficient Resources
     InsufficientResources,
+    /// Database Out Of Sync
     DatabaseOutOfSync,
+    /// Value Not Allowed
     ValueNotAllowed,
+    /// Application Error
     ApplicationError(u8),
+    /// Common Profile And Service Error Codes
     CommonProfileAndServiceErrorCodes(u8),
+    /// Reserved for Future Use
     ReservedForFutureUse(u8),
 }
 
@@ -96,133 +123,8 @@ impl Unpack for ErrorCode {
     }
 }
 
-packable_newtype! {
-    #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    pub struct Handle(u16);
-}
-
-impl Handle {
-    pub const fn new(v: u16) -> Self {
-        Self(v)
-    }
-
-    pub fn as_u16(&self) -> u16 {
-        self.0
-    }
-}
-
-impl fmt::Debug for Handle {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "0x{:04X}", self.0)
-    }
-}
-
-impl From<u16> for Handle {
-    fn from(v: u16) -> Self {
-        Self(v)
-    }
-}
-
-impl From<Handle> for u16 {
-    fn from(v: Handle) -> Self {
-        v.0
-    }
-}
-
-packable_newtype! {
-    #[derive(Clone, PartialEq, Eq)]
-    pub struct Uuid16(u16);
-}
-
-impl Uuid16 {
-    pub const fn new(v: u16) -> Self {
-        Self(v)
-    }
-
-    pub fn as_u16(&self) -> u16 {
-        self.0
-    }
-}
-
-impl From<u16> for Uuid16 {
-    fn from(v: u16) -> Self {
-        Self(v)
-    }
-}
-
-impl From<Uuid16> for u16 {
-    fn from(v: Uuid16) -> Self {
-        v.0
-    }
-}
-
-impl fmt::Debug for Uuid16 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "0x{:04X}", self.0)
-    }
-}
-
-impl From<Uuid16> for Uuid {
-    fn from(v: Uuid16) -> Self {
-        Self::Uuid16(v)
-    }
-}
-
-impl Pack for Uuid128 {
-    fn pack(self, buf: &mut BytesMut) {
-        self.to_u128_le().pack(buf);
-    }
-}
-
-impl Unpack for Uuid128 {
-    fn unpack<B: Buf>(buf: &mut B) -> Result<Self, UnpackError> {
-        Ok(Self::from_u128_le(Unpack::unpack(buf)?))
-    }
-}
-
-impl From<Uuid128> for Uuid {
-    fn from(v: Uuid128) -> Self {
-        Self::Uuid128(v)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Uuid {
-    Uuid16(Uuid16),
-    Uuid128(Uuid128),
-}
-
-impl Uuid {
-    pub const fn new_uuid16(v: u16) -> Self {
-        Self::Uuid16(Uuid16::new(v))
-    }
-
-    pub const fn new_uuid128(v: u128) -> Self {
-        Self::Uuid128(Uuid128::from_u128(v))
-    }
-}
-
-impl Pack for Uuid {
-    fn pack(self, buf: &mut BytesMut) {
-        match self {
-            Self::Uuid16(uuid) => uuid.pack(buf),
-            Self::Uuid128(uuid) => uuid.pack(buf),
-        }
-    }
-}
-
-impl Unpack for Uuid {
-    fn unpack<B: Buf>(buf: &mut B) -> Result<Self, UnpackError> {
-        match buf.remaining() {
-            2 => Ok(Self::Uuid16(Unpack::unpack(buf)?)),
-            16 => Ok(Self::Uuid128(Unpack::unpack(buf)?)),
-            v => Err(UnpackError::Unexpected(format!("unexpected length {}", v))),
-        }
-    }
-}
-
 #[derive(Debug)]
-pub struct HandlesInformationList(Vec<(Handle, Handle)>);
+struct HandlesInformationList(Vec<(Handle, Handle)>);
 
 impl Pack for HandlesInformationList {
     fn pack(self, buf: &mut BytesMut) {
@@ -244,7 +146,7 @@ impl Unpack for HandlesInformationList {
 }
 
 #[derive(Debug)]
-pub struct SetOfHandles(Vec<Handle>);
+struct SetOfHandles(Vec<Handle>);
 
 impl<'a> IntoIterator for &'a SetOfHandles {
     type Item = &'a Handle;
@@ -273,7 +175,7 @@ impl Unpack for SetOfHandles {
 }
 
 #[derive(Debug)]
-pub struct AttributeDataList<T>(Vec<T>);
+struct AttributeDataList<T>(Vec<T>);
 
 impl Pack for AttributeDataList<(Handle, Uuid)> {
     fn pack(self, buf: &mut BytesMut) {
@@ -415,6 +317,7 @@ impl Unpack for AttributeDataList<(Handle, Handle, Bytes)> {
     }
 }
 
+/// Failed to convert from Packet
 #[derive(Debug, thiserror::Error)]
 #[error("failed to convert from packet")]
 pub struct TryFromPacketError;
@@ -423,7 +326,9 @@ mod seal {
     pub trait Sealed {}
 }
 
+/// Packet's OP Code
 pub trait HasOpCode {
+    /// Get Packet's OP Code
     fn opcode() -> OpCode;
 }
 
@@ -480,12 +385,14 @@ macro_rules! packet {
         )*
 
         packable_enum! {
+            /// ATT Op Codes
             #[derive(Debug, PartialEq, Eq, Hash)]
             pub enum OpCode: u8 {
                 $($name => $op,)*
             }
         }
 
+        /// ATT Packet
         #[derive(Debug)]
         pub enum Packet {
             $($name($name),)*
@@ -519,6 +426,7 @@ macro_rules! packet {
 }
 
 packet! {
+    /// Error Response
     #[derive(Debug, New, Getters)]
     pub struct ErrorResponse: 0x01 {
         request_opcode_in_error: OpCode,
@@ -526,18 +434,21 @@ packet! {
         error_code: ErrorCode,
     }
 
+    /// Exchange MTU Request
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct ExchangeMtuRequest: 0x02 {
         client_rx_mtu: u16,
     }
 
+    /// Exchange MTU Response
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct ExchangeMtuResponse: 0x03 {
         server_rx_mtu: u16,
     }
 
+    /// Find Information Request
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct FindInformationRequest: 0x04 {
@@ -545,11 +456,13 @@ packet! {
         ending_handle: Handle,
     }
 
+    /// Find Information Response
     #[derive(Debug)]
     pub struct FindInformationResponse: 0x05 {
         values: AttributeDataList<(Handle, Uuid)>, // FIXME
     }
 
+    /// Find By Type Value Request
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct FindByTypeValueRequest: 0x06 {
@@ -559,11 +472,13 @@ packet! {
         attribute_value: Bytes,
     }
 
+    /// Find By Type Value Response
     #[derive(Debug)]
     pub struct FindByTypeValueResponse: 0x07 {
         values: HandlesInformationList,
     }
 
+    /// Read By Type Request
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct ReadByTypeRequest: 0x08 {
@@ -572,23 +487,27 @@ packet! {
         attribute_type: Uuid,
     }
 
+    /// Read By Type Response
     #[derive(Debug)]
     pub struct ReadByTypeResponse: 0x09 {
         values: AttributeDataList<(Handle, Bytes)>,
     }
 
+    /// Read Request
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct ReadRequest: 0x0A {
         attribute_handle: Handle,
     }
 
+    /// Read Response
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct ReadResponse: 0x0B {
         attribute_value: Bytes,
     }
 
+    /// Read Blob Request
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct ReadBlobRequest: 0x0C {
@@ -596,23 +515,26 @@ packet! {
         attribute_offset: u16,
     }
 
+    /// Read Blob Response
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct ReadBlobResponse: 0x0D {
         attribute_value: Bytes,
     }
 
-    #[derive(Debug, New, Getters)]
-    #[get = "pub"]
+    /// Read Multiple Request
+    #[derive(Debug)]
     pub struct ReadMultipleRequest: 0x0E {
         set_of_handles: SetOfHandles,
     }
 
+    /// Read Multiple Response
     #[derive(Debug, New)]
     pub struct ReadMultipleResponse: 0x0F {
         set_of_values: Bytes, // FIXME
     }
 
+    /// Read By Group Type Request
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct ReadByGroupTypeRequest: 0x10 {
@@ -621,11 +543,13 @@ packet! {
         attribute_group_type: Uuid,
     }
 
+    /// Read By Group Type Response
     #[derive(Debug)]
     pub struct ReadByGroupTypeResponse: 0x11 {
         values: AttributeDataList<(Handle, Handle, Bytes)>,
     }
 
+    /// Write Request
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct WriteRequest: 0x12 {
@@ -633,10 +557,12 @@ packet! {
         attribute_value: Bytes,
     }
 
+    /// Write Response
     #[derive(Debug, New, Default)]
     pub struct WriteResponse: 0x13 {
     }
 
+    /// Write Command
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct WriteCommand: 0x52 {
@@ -644,6 +570,7 @@ packet! {
         attribute_value: Bytes,
     }
 
+    /// Signed Write Command
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct SignedWriteCommand: 0xD2 {
@@ -652,6 +579,7 @@ packet! {
         authentication_signature: Bytes, // FIXME
     }
 
+    /// Prepare Write Request
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct PrepareWriteRequest: 0x16 {
@@ -660,6 +588,7 @@ packet! {
         part_attribute_value: Bytes,
     }
 
+    /// Prepare Write Response
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct PrepareWriteResponse: 0x17 {
@@ -668,16 +597,19 @@ packet! {
         part_attribute_value: Bytes,
     }
 
+    /// Execute Write Request
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct ExecuteWriteRequest: 0x18 {
         flags: bool,
     }
 
+    /// Execute Write Response
     #[derive(Debug, New, Default)]
     pub struct ExecuteWriteResponse: 0x19 {
     }
 
+    /// Handle Value Notification
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct HandleValueNotification: 0x1B {
@@ -685,6 +617,7 @@ packet! {
         attribute_value: Bytes,
     }
 
+    /// Handle Value Indication
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct HandleValueIndication: 0x1D {
@@ -692,28 +625,36 @@ packet! {
         attribute_value: Bytes,
     }
 
+    /// Handle Value Confirmation
     #[derive(Debug, New, Default)]
     pub struct HandleValueConfirmation: 0x1E {
     }
 
 }
 
+/// ATT Request
 pub trait Request: seal::Sealed {
     type Response: Response;
 }
 
+/// ATT Response
 pub trait Response: seal::Sealed {
+    // truncate by mtu
     fn truncate(&mut self, mtu: usize);
 }
 
+/// ATT Command
 pub trait Command: seal::Sealed {}
 
-pub trait Notificaion: seal::Sealed {}
+/// ATT Notification
+pub trait Notification: seal::Sealed {}
 
+/// ATT Indication
 pub trait Indication: seal::Sealed {
     type Confirmation: Confirmation;
 }
 
+/// ATT Confirmation
 pub trait Confirmation: seal::Sealed {}
 
 impl Response for ErrorResponse {
@@ -855,7 +796,7 @@ impl Response for ExecuteWriteResponse {
     fn truncate(&mut self, _: usize) {}
 }
 
-impl Notificaion for HandleValueNotification {}
+impl Notification for HandleValueNotification {}
 
 impl Indication for HandleValueIndication {
     type Confirmation = HandleValueConfirmation;
