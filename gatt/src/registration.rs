@@ -15,7 +15,7 @@ bitflags::bitflags! {
     pub struct CharacteristicProperties: u32 {
         const BROADCAST = 0x0001;
         const READ = 0x0002;
-        const WRITE_WITHOUT_WRITE = 0x0004;
+        const WRITE_WITHOUT_RESPONSE = 0x0004;
         const WRITE = 0x0008;
         const NOTIFY = 0x0010;
         const INDICATE = 0x0020;
@@ -32,7 +32,7 @@ impl CharacteristicProperties {
         if self.contains(Self::READ) {
             perm |= Permission::READABLE;
         }
-        if self.contains(Self::WRITE) || self.contains(Self::WRITE_WITHOUT_WRITE) {
+        if self.contains(Self::WRITE) || self.contains(Self::WRITE_WITHOUT_RESPONSE) {
             perm |= Permission::WRITEABLE;
         }
         if self.contains(Self::AUTHENTICATED_SIGNED_WRITES) {

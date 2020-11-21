@@ -31,7 +31,7 @@ bitflags::bitflags! {
     pub(crate) struct CharacteristicProperties: u8 {
         const BROADCAST = 0x01;
         const READ = 0x02;
-        const WRITE_WITHOUT_WRITE = 0x04;
+        const WRITE_WITHOUT_RESPONSE = 0x04;
         const WRITE = 0x08;
         const NOTIFY = 0x10;
         const INDICATE = 0x20;
