@@ -149,6 +149,13 @@ pub(crate) enum Attribute {
         handle: Handle,
         attribute_handles: Vec<Handle>,
     },
+
+    Descriptor {
+        handle: Handle,
+        uuid: Uuid,
+        value: Bytes,
+        permission: Permission,
+    },
 }
 
 impl Attribute {
@@ -275,6 +282,20 @@ impl Attribute {
             attribute_handles,
         }
     }
+
+    pub(crate) fn new_descriptor(
+        handle: Handle,
+        uuid: Uuid,
+        value: Bytes,
+        permission: Permission,
+    ) -> Self {
+        Self::Descriptor {
+            handle,
+            uuid,
+            value,
+            permission,
+        }
+    }
 }
 
 impl Attribute {
@@ -290,6 +311,7 @@ impl Attribute {
             Self::ServerCharacteristicConfiguration { handle, .. } => &handle,
             Self::CharacteristicPresentationFormat { handle, .. } => &handle,
             Self::CharacteristicAggregateFormat { handle, .. } => &handle,
+            Self::Descriptor { handle, .. } => &handle,
         }
     }
 
@@ -306,6 +328,7 @@ impl Attribute {
             Self::ServerCharacteristicConfiguration { .. } => &SERVER_CHARACTERISTIC_CONFIGURATION,
             Self::CharacteristicPresentationFormat { .. } => &CHARACTERISTIC_PRESENTATION_FORMAT,
             Self::CharacteristicAggregateFormat { .. } => &CHARACTERISTIC_AGGREGATE_FORMAT,
+            Self::Descriptor { uuid, .. } => &uuid,
         }
     }
 
@@ -321,6 +344,7 @@ impl Attribute {
             Self::ServerCharacteristicConfiguration { permission, .. } => *permission,
             Self::CharacteristicPresentationFormat { .. } => Permission::READABLE,
             Self::CharacteristicAggregateFormat { .. } => Permission::READABLE,
+            Self::Descriptor { permission, .. } => *permission,
         }
     }
 
@@ -434,6 +458,8 @@ impl Attribute {
                 }
                 result.freeze()
             }
+
+            Self::Descriptor { value, .. } => value.clone(),
         })
     }
 
@@ -579,6 +605,8 @@ impl Attribute {
                 }
                 *attribute_handles = v;
             }
+
+            Self::Descriptor { value, .. } => *value = val.copy_to_bytes(val.remaining()),
         };
         Ok(())
     }
