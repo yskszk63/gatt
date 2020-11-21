@@ -270,4 +270,14 @@ impl Server {
         let connection = self.inner.accept().await?;
         Ok(Connection { inner: connection })
     }
+
+    pub fn needs_bond(&self) -> io::Result<()> {
+        self.inner.needs_bond()?;
+        Ok(())
+    }
+
+    pub fn needs_bond_mitm(&self) -> io::Result<()> {
+        self.inner.needs_bond_mitm()?;
+        Ok(())
+    }
 }
