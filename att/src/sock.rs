@@ -225,7 +225,7 @@ impl<'a> Future for Accept<'a> {
                 Err(e) => return Poll::Ready(Err(e)),
                 Ok((sock, addr)) => {
                     let addr = unsafe { sockaddr_l2::try_from(addr) };
-                    let addr = crate::Address::new(addr.unwrap().l2_bdaddr.b); // FIXME
+                    let addr = crate::Address::from(addr.unwrap().l2_bdaddr.b);
                     sock.set_nonblocking(true)?;
                     let sock = AttStream {
                         inner: AsyncFd::new(sock)?,
