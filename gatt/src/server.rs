@@ -88,6 +88,18 @@ where
         Ok(pkt::ReadResponse::new(r))
     }
 
+    fn handle_read_blob_request(
+        &mut self,
+        item: &pkt::ReadBlobRequest,
+    ) -> Result<pkt::ReadBlobResponse, ErrorResponse> {
+        let mut r = match self.db.read(item.attribute_handle(), false, false) {
+            Ok(v) => v,
+            Err((h, e)) => return Err(ErrorResponse::new(h, e)),
+        };
+        let offset = *item.attribute_offset() as usize;
+        Ok(pkt::ReadBlobResponse::new(r.split_off(offset)))
+    }
+
     fn handle_read_by_group_type_request(
         &mut self,
         item: &pkt::ReadByGroupTypeRequest,
