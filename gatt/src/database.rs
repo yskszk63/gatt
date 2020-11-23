@@ -3,6 +3,7 @@ use std::iter::FromIterator;
 use std::ops::RangeInclusive;
 
 use att::packet::ErrorCode;
+use att::uuid::Uuid16;
 use att::{Handle, Uuid};
 use bytes::Bytes;
 
@@ -70,6 +71,33 @@ impl Database {
         } else {
             Err((start, ErrorCode::AttributeNotFound))
         }
+    }
+
+    pub(crate) fn find_by_type_value(
+        &self,
+        range: RangeInclusive<Handle>,
+        uuid: &Uuid16,
+        value: &Bytes,
+        authorized: bool,
+        authenticated: bool,
+    ) -> Result<Vec<(Handle, Handle)>, (Handle, ErrorCode)> {
+        let start = range.start().clone();
+
+        let result = self
+            .read_by_group_type(range, &uuid.clone().into(), authorized, authenticated)?
+            .into_iter()
+            .filter_map(|(handle, end, v)| {
+                if v == value {
+                    Some((handle, end))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        if result.is_empty() {
+            return Err((start, ErrorCode::AttributeNotFound));
+        }
+        Ok(result)
     }
 
     pub(crate) fn read_by_type(
@@ -311,6 +339,32 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(result, (0x0000.into(), ErrorCode::InvalidHandle));
+    }
+
+    #[test]
+    fn test_find_by_type_value() {
+        let db = example_db();
+
+        let result = db
+            .find_by_type_value(
+                0x0001.into()..=0xFFFF.into(),
+                &Uuid16::new(0x2800),
+                &vec![0x01, 0x18].into(),
+                false,
+                false,
+            )
+            .unwrap();
+        assert_eq!(&result, &[(0x000C.into(), 0x000F.into())]);
+        let result = db
+            .find_by_type_value(
+                0x0010.into()..=0xFFFF.into(),
+                &Uuid16::new(0x2800),
+                &vec![0x01, 0x18].into(),
+                false,
+                false,
+            )
+            .unwrap_err();
+        assert_eq!(result, (0x0010.into(), ErrorCode::AttributeNotFound));
     }
 
     #[test]

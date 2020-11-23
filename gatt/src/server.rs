@@ -61,6 +61,23 @@ where
         Ok(r.into_iter().map(Into::into).collect())
     }
 
+    fn handle_find_by_type_value_request(
+        &mut self,
+        item: &pkt::FindByTypeValueRequest,
+    ) -> Result<pkt::FindByTypeValueResponse, ErrorResponse> {
+        let r = match self.db.find_by_type_value(
+            item.starting_handle().clone()..=item.ending_handle().clone(),
+            item.attribute_type(),
+            item.attribute_value(),
+            false,
+            false,
+        ) {
+            Ok(v) => v,
+            Err((h, e)) => return Err(ErrorResponse::new(h, e)),
+        };
+        Ok(r.into_iter().map(Into::into).collect())
+    }
+
     fn handle_read_by_type_request(
         &mut self,
         item: &pkt::ReadByTypeRequest,
