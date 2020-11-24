@@ -238,6 +238,10 @@ where
 }
 
 impl Connection {
+    pub fn address(&self) -> &crate::Address {
+        &self.addr
+    }
+
     pub fn outbound(&self) -> Outbound {
         Outbound {
             tx: self.tx.clone(),

@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::hash::Hash;
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use att::packet as pkt;
 use att::server::{
@@ -20,6 +22,7 @@ struct GattHandler<T> {
     db: Database,
     write_tokens: HashMap<Handle, T>,
     events_tx: mpsc::UnboundedSender<Event<T>>,
+    authenticated: Arc<AtomicBool>,
 }
 
 impl<T> GattHandler<T> {
@@ -27,12 +30,18 @@ impl<T> GattHandler<T> {
         db: Database,
         write_tokens: HashMap<Handle, T>,
         events_tx: mpsc::UnboundedSender<Event<T>>,
+        authenticated: Arc<AtomicBool>,
     ) -> Self {
         Self {
             db,
             write_tokens,
             events_tx,
+            authenticated,
         }
+    }
+
+    fn authenticated(&self) -> bool {
+        self.authenticated.load(Ordering::SeqCst)
     }
 }
 
@@ -70,7 +79,7 @@ where
             item.attribute_type(),
             item.attribute_value(),
             false,
-            false,
+            self.authenticated(),
         ) {
             Ok(v) => v,
             Err((h, e)) => return Err(ErrorResponse::new(h, e)),
@@ -86,7 +95,7 @@ where
             item.starting_handle().clone()..=item.ending_handle().clone(),
             item.attribute_type(),
             false,
-            false,
+            self.authenticated(),
         ) {
             Ok(v) => v,
             Err((h, e)) => return Err(ErrorResponse::new(h, e)),
@@ -98,7 +107,10 @@ where
         &mut self,
         item: &pkt::ReadRequest,
     ) -> Result<pkt::ReadResponse, ErrorResponse> {
-        let r = match self.db.read(item.attribute_handle(), false, false) {
+        let r = match self
+            .db
+            .read(item.attribute_handle(), false, self.authenticated())
+        {
             Ok(v) => v,
             Err((h, e)) => return Err(ErrorResponse::new(h, e)),
         };
@@ -109,7 +121,10 @@ where
         &mut self,
         item: &pkt::ReadBlobRequest,
     ) -> Result<pkt::ReadBlobResponse, ErrorResponse> {
-        let mut r = match self.db.read(item.attribute_handle(), false, false) {
+        let mut r = match self
+            .db
+            .read(item.attribute_handle(), false, self.authenticated())
+        {
             Ok(v) => v,
             Err((h, e)) => return Err(ErrorResponse::new(h, e)),
         };
@@ -125,7 +140,7 @@ where
             item.starting_handle().clone()..=item.ending_handle().clone(),
             item.attribute_group_type(),
             false,
-            false,
+            self.authenticated(),
         ) {
             Ok(v) => v,
             Err((h, e)) => return Err(ErrorResponse::new(h, e)),
@@ -187,30 +202,37 @@ where
 
 #[derive(Debug, thiserror::Error)]
 #[error("channel error")]
-pub struct OutgoingError;
+pub struct ChannelError;
 
 #[derive(Debug)]
-pub struct Outgoing<T> {
+pub struct Control<T> {
     inner: Outbound,
     token_map: HashMap<T, Handle>,
+    authenticated: Arc<AtomicBool>,
 }
 
-impl<T> Outgoing<T>
+impl<T> Control<T> {
+    pub fn mark_authenticated(&self) {
+        self.authenticated.store(true, Ordering::SeqCst);
+    }
+}
+
+impl<T> Control<T>
 where
     T: Eq + Hash,
 {
-    pub fn notify<B>(&self, token: &T, val: B) -> Result<(), OutgoingError>
+    pub fn notify<B>(&self, token: &T, val: B) -> Result<(), ChannelError>
     where
         B: Into<Bytes>,
     {
         let handle = self.token_map.get(token).unwrap();
         self.inner
             .notify(handle.clone(), val.into())
-            .map_err(|_| OutgoingError)?;
+            .map_err(|_| ChannelError)?;
         Ok(())
     }
 
-    pub async fn indicate<B>(&self, token: &T, val: B) -> Result<(), OutgoingError>
+    pub async fn indicate<B>(&self, token: &T, val: B) -> Result<(), ChannelError>
     where
         B: Into<Bytes>,
     {
@@ -218,7 +240,7 @@ where
         self.inner
             .indicate(handle.clone(), val.into())
             .await
-            .map_err(|_| OutgoingError)?;
+            .map_err(|_| ChannelError)?;
         Ok(())
     }
 }
@@ -247,12 +269,18 @@ pub struct Connection {
 }
 
 impl Connection {
+    pub fn address(&self) -> &att::Address {
+        &self.inner.address()
+    }
+
     pub fn run<T>(
         self,
+        authenticated: bool,
         registration: Registration<T>,
     ) -> (
+        att::Address,
         impl Future<Output = Result<(), RunError>>,
-        Outgoing<T>,
+        Control<T>,
         Events<T>,
     )
     where
@@ -260,11 +288,18 @@ impl Connection {
     {
         let (db, write_tokens, notify_or_indicate_handles) = registration.build();
         let outgoing = self.inner.outbound();
+        let address = self.inner.address().clone();
 
         let (tx, rx) = mpsc::unbounded_channel();
         let events = Events(rx);
 
-        let task = self.inner.run(GattHandler::<T>::new(db, write_tokens, tx));
+        let authenticated = Arc::new(AtomicBool::new(authenticated));
+        let task = self.inner.run(GattHandler::<T>::new(
+            db,
+            write_tokens,
+            tx,
+            authenticated.clone(),
+        ));
         let task = async move {
             if let Err(e) = task.await {
                 Err(e.into())
@@ -274,10 +309,12 @@ impl Connection {
         };
 
         (
+            address,
             task,
-            Outgoing {
+            Control {
                 inner: outgoing,
                 token_map: notify_or_indicate_handles,
+                authenticated,
             },
             events,
         )

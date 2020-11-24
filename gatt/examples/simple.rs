@@ -64,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
 
     let server = Server::bind()?;
     let connection = server.accept().await?;
-    let (task, outgoing, mut events) = connection.run(new_registration());
+    let (task, outgoing, mut events) = connection.run(false, new_registration());
     let mut task = tokio::spawn(task);
 
     let mut n = 0;
