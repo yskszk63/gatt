@@ -12,6 +12,7 @@ use crate::attribute::{
 use crate::database::Database;
 
 bitflags::bitflags! {
+    /// Characteristic Properties
     pub struct CharacteristicProperties: u32 {
         const BROADCAST = 0x0001;
         const READ = 0x0002;

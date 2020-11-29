@@ -1,3 +1,4 @@
+//! List of Characteristic [`Uuid`]s.
 use crate::Uuid;
 
 /// Device Name

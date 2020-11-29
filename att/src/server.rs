@@ -1,3 +1,4 @@
+//! ATT Protocol Server
 use std::collections::VecDeque;
 use std::io;
 
@@ -11,17 +12,21 @@ use crate::packet::Response;
 use crate::sock::{AttListener, AttStream};
 use crate::Handle;
 
+/// ATT Protocol Error Response
 #[derive(Debug, thiserror::Error)]
 #[error("error response {0:?} {1:?}")]
 pub struct ErrorResponse(Handle, pkt::ErrorCode);
 
 impl ErrorResponse {
+    /// Constract Instance
     pub fn new(handle: Handle, code: pkt::ErrorCode) -> Self {
         Self(handle, code)
     }
 }
 
+/// ATT Protocol Handler
 pub trait Handler {
+    /// handle `exchange mtu request`
     fn handle_exchange_mtu_request(
         &mut self,
         item: &pkt::ExchangeMtuRequest,
@@ -29,6 +34,7 @@ pub trait Handler {
         Ok(pkt::ExchangeMtuResponse::new(*item.client_rx_mtu()))
     }
 
+    /// handle `find information request`
     fn handle_find_information_request(
         &mut self,
         item: &pkt::FindInformationRequest,
@@ -39,6 +45,7 @@ pub trait Handler {
         ))
     }
 
+    /// handle `find by type value request`
     fn handle_find_by_type_value_request(
         &mut self,
         item: &pkt::FindByTypeValueRequest,
@@ -49,6 +56,7 @@ pub trait Handler {
         ))
     }
 
+    /// handle `read by type request`
     fn handle_read_by_type_request(
         &mut self,
         item: &pkt::ReadByTypeRequest,
@@ -59,6 +67,7 @@ pub trait Handler {
         ))
     }
 
+    /// handle `read request`
     fn handle_read_request(
         &mut self,
         item: &pkt::ReadRequest,
@@ -69,6 +78,7 @@ pub trait Handler {
         ))
     }
 
+    /// handle `read blob request`
     fn handle_read_blob_request(
         &mut self,
         item: &pkt::ReadBlobRequest,
@@ -79,6 +89,7 @@ pub trait Handler {
         ))
     }
 
+    /// handle `read multiple request`
     fn handle_read_multiple_request(
         &mut self,
         item: &pkt::ReadMultipleRequest,
@@ -89,6 +100,7 @@ pub trait Handler {
         ))
     }
 
+    /// handle `read by group type request`
     fn handle_read_by_group_type_request(
         &mut self,
         item: &pkt::ReadByGroupTypeRequest,
@@ -99,6 +111,7 @@ pub trait Handler {
         ))
     }
 
+    /// handle `write request`
     fn handle_write_request(
         &mut self,
         item: &pkt::WriteRequest,
@@ -109,11 +122,13 @@ pub trait Handler {
         ))
     }
 
+    /// handle `write command`
     #[allow(unused_variables)]
     fn handle_write_command(&mut self, item: &pkt::WriteCommand) {
         // nop
     }
 
+    /// handle `prepare write request`
     fn handle_prepare_write_request(
         &mut self,
         item: &pkt::PrepareWriteRequest,
@@ -124,6 +139,7 @@ pub trait Handler {
         ))
     }
 
+    /// handle `execute write request`
     #[allow(unused_variables)]
     fn handle_execute_write_request(
         &mut self,
@@ -135,6 +151,7 @@ pub trait Handler {
         ))
     }
 
+    /// handle `signed write command`
     #[allow(unused_variables)]
     fn handle_signed_write_command(&mut self, item: &pkt::SignedWriteCommand) {
         // nop
@@ -147,24 +164,28 @@ enum OutgoingMessage {
     Indication(pkt::HandleValueIndication, oneshot::Sender<()>),
 }
 
+/// Error for [`Outgoing::notify`]
 #[derive(Debug, thiserror::Error)]
 pub enum NotifyError {
     #[error("task maybe dropped.")]
     Closed,
 }
 
+/// Error for [`Outgoing::indicate`]
 #[derive(Debug, thiserror::Error)]
 pub enum IndicateError {
     #[error("task maybe dropped.")]
     Closed,
 }
 
+/// Process Notify / Indicate
 #[derive(Debug, Clone)]
-pub struct Outbound {
+pub struct Outgoing {
     tx: mpsc::UnboundedSender<OutgoingMessage>,
 }
 
-impl Outbound {
+impl Outgoing {
+    /// Notify to device.
     pub fn notify(&self, handle: Handle, value: Bytes) -> Result<(), NotifyError> {
         self.tx
             .send(OutgoingMessage::Notification(
@@ -174,6 +195,7 @@ impl Outbound {
         Ok(())
     }
 
+    /// Indicate to device.
     pub async fn indicate(&self, handle: Handle, value: Bytes) -> Result<(), IndicateError> {
         let (tx, rx) = oneshot::channel();
         self.tx
@@ -189,6 +211,7 @@ impl Outbound {
 
 const DEFAULT_MTU: usize = 23;
 
+/// Error for [`Connection::run`]
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
     #[error(transparent)]
@@ -198,6 +221,7 @@ pub enum RunError {
     Unpack(#[from] UnpackError),
 }
 
+/// ATT Protocol Connection
 #[derive(Debug)]
 pub struct Connection {
     tx: mpsc::UnboundedSender<OutgoingMessage>,
@@ -238,16 +262,19 @@ where
 }
 
 impl Connection {
+    /// Get peer address.
     pub fn address(&self) -> &crate::Address {
         &self.addr
     }
 
-    pub fn outbound(&self) -> Outbound {
-        Outbound {
+    /// Get [`Outgoing`]
+    pub fn outgoing(&self) -> Outgoing {
+        Outgoing {
             tx: self.tx.clone(),
         }
     }
 
+    /// Run with [`Handler`] forever.
     pub async fn run<H>(self, mut handler: H) -> Result<(), RunError>
     where
         H: Handler,
@@ -366,12 +393,14 @@ impl Connection {
     }
 }
 
+/// ATT Protocol Server.
 #[derive(Debug)]
 pub struct Server {
     sock: AttListener,
 }
 
 impl Server {
+    /// Constract Instance.
     pub fn new() -> io::Result<Self> {
         let sock = AttListener::new()?;
         Ok(Self { sock })
@@ -387,6 +416,7 @@ impl Server {
             .set_sockopt_bt_security(crate::sock::BT_SECURITY_HIGH, 0)
     }
 
+    /// Accept Connection.
     pub async fn accept(&self) -> io::Result<Connection> {
         let (sock, addr) = self.sock.accept().await?;
         let (tx, rx) = mpsc::unbounded_channel();

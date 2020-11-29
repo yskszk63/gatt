@@ -1,3 +1,4 @@
+//! GATT Protocol Server
 use std::collections::HashMap;
 use std::future::Future;
 use std::hash::Hash;
@@ -7,7 +8,7 @@ use std::sync::Arc;
 
 use att::packet as pkt;
 use att::server::{
-    Connection as AttConnection, ErrorResponse, Handler, Outbound, RunError as AttRunError,
+    Connection as AttConnection, ErrorResponse, Handler, Outgoing, RunError as AttRunError,
     Server as AttServer,
 };
 use att::Handle;
@@ -200,13 +201,15 @@ where
     }
 }
 
+/// Error for [`Control::notify`] | [`Control::indicate`]
 #[derive(Debug, thiserror::Error)]
 #[error("channel error")]
 pub struct ChannelError;
 
+/// GATT Server control.
 #[derive(Debug)]
 pub struct Control<T> {
-    inner: Outbound,
+    inner: Outgoing,
     token_map: HashMap<T, Handle>,
     authenticated: Arc<AtomicBool>,
 }
@@ -221,6 +224,7 @@ impl<T> Control<T>
 where
     T: Eq + Hash,
 {
+    /// Notify to device
     pub fn notify<B>(&self, token: &T, val: B) -> Result<(), ChannelError>
     where
         B: Into<Bytes>,
@@ -232,6 +236,7 @@ where
         Ok(())
     }
 
+    /// Indicate to device
     pub async fn indicate<B>(&self, token: &T, val: B) -> Result<(), ChannelError>
     where
         B: Into<Bytes>,
@@ -245,11 +250,13 @@ where
     }
 }
 
+/// GATT Event
 #[derive(Debug)]
 pub enum Event<T> {
     Write(T, Bytes),
 }
 
+/// GATT Event Stream
 #[derive(Debug)]
 pub struct Events<T>(mpsc::UnboundedReceiver<Event<T>>);
 
@@ -259,10 +266,12 @@ impl<T> Events<T> {
     }
 }
 
+/// Run [`Connection::run`]
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
 pub struct RunError(#[from] AttRunError);
 
+/// GATT Connection
 #[derive(Debug)]
 pub struct Connection {
     inner: AttConnection,
@@ -287,7 +296,7 @@ impl Connection {
         T: Hash + Eq + Clone,
     {
         let (db, write_tokens, notify_or_indicate_handles) = registration.build();
-        let outgoing = self.inner.outbound();
+        let outgoing = self.inner.outgoing();
         let address = self.inner.address().clone();
 
         let (tx, rx) = mpsc::unbounded_channel();
@@ -321,6 +330,7 @@ impl Connection {
     }
 }
 
+/// GATT Protocol Server
 #[derive(Debug)]
 pub struct Server {
     inner: AttServer,
@@ -332,6 +342,7 @@ impl Server {
         Ok(Self { inner: server })
     }
 
+    /// Accept [`Connection`]
     pub async fn accept(&self) -> io::Result<Connection> {
         let connection = self.inner.accept().await?;
         Ok(Connection { inner: connection })

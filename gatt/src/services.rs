@@ -1,3 +1,4 @@
+//! List of Service [`Uuid`]s.
 use crate::Uuid;
 
 /// Generic Access
