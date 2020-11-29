@@ -3,11 +3,14 @@ name = "gatt"
 version = "0.1.0"
 authors = ["yskszk63 <yskszk63@gmail.com>"]
 edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "Bluetooth Generic Attribute Protocol Server"
+repository = "https://github.com/yskszk63/gatt"
+license = "MIT OR Apache-2.0"
+keywords = ["bluetooth"]
+readme = "../README.md"
 
 [dependencies]
-att = { path = "../att/" }
+att = { path = "../att/", version = "0.1.0"}
 bitflags = "1.2"
 bytes = "0.6"
 thiserror = "1.0"
