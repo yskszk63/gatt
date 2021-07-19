@@ -8,6 +8,7 @@ use std::task::{Context, Poll};
 
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::io::unix::AsyncFd;
+use tokio::io::ReadBuf;
 
 // <bluetooth/bluetooth.h>
 const BTPROTO_L2CAP: libc::c_int = 0;
@@ -94,26 +95,24 @@ fn is_wouldblock(err: &io::Error) -> bool {
 
 fn sock_open() -> io::Result<Socket> {
     let domain = Domain::from(libc::AF_BLUETOOTH);
-    let r#type = Type::seqpacket().non_blocking().cloexec();
+    let r#type = Type::SEQPACKET.nonblocking().cloexec();
     let proto = Protocol::from(BTPROTO_L2CAP);
     Socket::new(domain, r#type, Some(proto))
 }
 
 fn sock_bind(sock: &Socket, cid: libc::c_ushort) -> io::Result<()> {
-    let addr = sockaddr_l2 {
-        l2_family: (libc::AF_BLUETOOTH as libc::sa_family_t),
-        l2_psm: Default::default(),
-        l2_cid: cid.to_le(),
-        l2_bdaddr: bdaddr_t { b: [0; 6] },
-        l2_bdaddr_type: BDADDR_LE_PUBLIC,
-    }
-    .into();
-
-    let addr = unsafe {
-        SockAddr::from_raw_parts(
-            &addr as *const _,
-            mem::size_of::<sockaddr_l2>() as libc::socklen_t,
-        )
+    let (_, addr) = unsafe {
+        SockAddr::init(|addr, _| {
+            let addr = &mut *(addr as *mut sockaddr_l2);
+            *addr = sockaddr_l2 {
+                l2_family: (libc::AF_BLUETOOTH as libc::sa_family_t),
+                l2_psm: Default::default(),
+                l2_cid: cid.to_le(),
+                l2_bdaddr: bdaddr_t { b: [0; 6] },
+                l2_bdaddr_type: BDADDR_LE_PUBLIC,
+            };
+            Ok(())
+        })?
     };
     sock.bind(&addr)?;
     Ok(())
@@ -143,7 +142,7 @@ fn set_sockopt_bt_security(fd: RawFd, level: u8, key_size: u8) -> io::Result<()>
 #[derive(Debug)]
 pub(crate) struct Recv<'a, 'b> {
     inner: &'a AsyncFd<Socket>,
-    buf: &'b mut [u8],
+    buf: ReadBuf<'b>,
 }
 
 impl<'a, 'b> Future for Recv<'a, 'b> {
@@ -151,14 +150,17 @@ impl<'a, 'b> Future for Recv<'a, 'b> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let Self { inner, buf } = self.get_mut();
-        loop {
-            let mut guard = ready!(inner.poll_read_ready(cx)?);
 
-            match inner.get_ref().recv(buf) {
-                Err(e) if is_wouldblock(&e) => guard.clear_ready(),
-                Err(e) => return Poll::Ready(Err(e)),
-                Ok(ret) => return Poll::Ready(Ok(ret)),
+        let mut guard = ready!(inner.poll_read_ready(cx)?);
+        let result = guard.try_io(|fd| fd.get_ref().recv(unsafe { buf.unfilled_mut() }));
+        match result {
+            Ok(Ok(ret)) => {
+                unsafe { buf.assume_init(ret) };
+                buf.advance(ret);
+                Poll::Ready(Ok(ret))
             }
+            Ok(Err(err)) => Poll::Ready(Err(err)),
+            Err(..) => Poll::Pending,
         }
     }
 }
@@ -174,14 +176,13 @@ impl<'a, 'b> Future for Send<'a, 'b> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let Self { inner, buf } = self.get_mut();
-        loop {
-            let mut guard = ready!(inner.poll_write_ready(cx)?);
-
-            match inner.get_ref().send(buf) {
-                Err(e) if is_wouldblock(&e) => guard.clear_ready(),
-                Err(e) => return Poll::Ready(Err(e)),
-                Ok(ret) => return Poll::Ready(Ok(ret)),
-            }
+        let mut guard = ready!(inner.poll_write_ready(cx)?);
+        let result = guard.try_io(|fd| fd.get_ref().send(buf));
+        match result {
+            Ok(Ok(0)) => Poll::Ready(Err(io::Error::new(io::ErrorKind::WriteZero, "write zero."))),
+            Ok(Ok(ret)) => Poll::Ready(Ok(ret)),
+            Ok(Err(err)) => Poll::Ready(Err(err)),
+            Err(..) => Poll::Pending,
         }
     }
 }
@@ -195,7 +196,7 @@ impl AttStream {
     pub(crate) fn recv<'b>(&self, buf: &'b mut [u8]) -> Recv<'_, 'b> {
         Recv {
             inner: &self.inner,
-            buf,
+            buf: ReadBuf::new(buf),
         }
     }
 

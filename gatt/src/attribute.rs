@@ -553,7 +553,9 @@ impl Attribute {
             }
 
             Self::CharacteristicUserDescription { description, .. } => {
-                *description = match String::from_utf8(val.bytes().to_vec()) {
+                let mut b = vec![0; val.remaining()];
+                val.copy_to_slice(&mut b);
+                *description = match String::from_utf8(b) {
                     Ok(v) => v,
                     Err(_) => return Err(Error::InvalidDataLength),
                 }
