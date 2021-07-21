@@ -1,6 +1,6 @@
 [package]
 name = "gatt"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["yskszk63 <yskszk63@gmail.com>"]
 edition = "2018"
 description = "Bluetooth Generic Attribute Protocol Server"
@@ -10,7 +10,7 @@ keywords = ["bluetooth"]
 readme = "../README.md"
 
 [dependencies]
-att = { path = "../att/", version = "0.1.1"}
+att = { path = "../att/", version = "0.1.2"}
 bitflags = "1.2"
 bytes = "1.0"
 thiserror = "1.0"
