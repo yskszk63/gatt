@@ -151,16 +151,18 @@ impl<'a, 'b> Future for Recv<'a, 'b> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let Self { inner, buf } = self.get_mut();
 
-        let mut guard = ready!(inner.poll_read_ready(cx)?);
-        let result = guard.try_io(|fd| fd.get_ref().recv(unsafe { buf.unfilled_mut() }));
-        match result {
-            Ok(Ok(ret)) => {
-                unsafe { buf.assume_init(ret) };
-                buf.advance(ret);
-                Poll::Ready(Ok(ret))
+        loop {
+            let mut guard = ready!(inner.poll_read_ready(cx)?);
+            let result = guard.try_io(|fd| fd.get_ref().recv(unsafe { buf.unfilled_mut() }));
+            match result {
+                Ok(Ok(ret)) => {
+                    unsafe { buf.assume_init(ret) };
+                    buf.advance(ret);
+                    return Poll::Ready(Ok(ret));
+                }
+                Ok(Err(err)) => return Poll::Ready(Err(err)),
+                Err(..) => {}
             }
-            Ok(Err(err)) => Poll::Ready(Err(err)),
-            Err(..) => Poll::Pending,
         }
     }
 }
@@ -176,13 +178,21 @@ impl<'a, 'b> Future for Send<'a, 'b> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let Self { inner, buf } = self.get_mut();
-        let mut guard = ready!(inner.poll_write_ready(cx)?);
-        let result = guard.try_io(|fd| fd.get_ref().send(buf));
-        match result {
-            Ok(Ok(0)) => Poll::Ready(Err(io::Error::new(io::ErrorKind::WriteZero, "write zero."))),
-            Ok(Ok(ret)) => Poll::Ready(Ok(ret)),
-            Ok(Err(err)) => Poll::Ready(Err(err)),
-            Err(..) => Poll::Pending,
+
+        loop {
+            let mut guard = ready!(inner.poll_write_ready(cx)?);
+            let result = guard.try_io(|fd| fd.get_ref().send(buf));
+            match result {
+                Ok(Ok(0)) => {
+                    return Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "write zero.",
+                    )))
+                }
+                Ok(Ok(ret)) => return Poll::Ready(Ok(ret)),
+                Ok(Err(err)) => return Poll::Ready(Err(err)),
+                Err(..) => {}
+            }
         }
     }
 }

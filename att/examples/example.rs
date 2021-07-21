@@ -168,6 +168,17 @@ impl Handler for H {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
+    // 1. ensure bluez stop
+    // 2. start advertising
+    //   - btmgmt power on
+    //   - btmgmt connectable yes
+    //   - btmgmt discov yes
+    //   - btmgmt advertising on
+    // 3. run this
+    //   - cargo run --example example
+
+    pretty_env_logger::init();
+
     let server = Server::new()?;
     //server.needs_bond_mitm()?;
     let connection = server.accept().await?;
