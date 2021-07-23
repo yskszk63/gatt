@@ -66,20 +66,6 @@ impl sockaddr_l2 {
     }
 }
 
-impl From<sockaddr_l2> for libc::sockaddr {
-    fn from(s: sockaddr_l2) -> Self {
-        let mut result = MaybeUninit::<libc::sockaddr>::uninit();
-        unsafe {
-            ptr::copy_nonoverlapping(
-                &s as *const _ as *const u8,
-                &mut result as *mut _ as *mut u8,
-                mem::size_of::<sockaddr_l2>(),
-            );
-            result.assume_init()
-        }
-    }
-}
-
 macro_rules! ready {
     ($e:expr) => {
         match $e {
@@ -87,10 +73,6 @@ macro_rules! ready {
             Poll::Ready(e) => e,
         }
     };
-}
-
-fn is_wouldblock(err: &io::Error) -> bool {
-    err.kind() == io::ErrorKind::WouldBlock
 }
 
 fn sock_open() -> io::Result<Socket> {
@@ -226,15 +208,14 @@ pub(crate) struct Accept<'a> {
 impl<'a> Future for Accept<'a> {
     type Output = io::Result<(AttStream, crate::Address)>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        loop {
-            let pinned = Pin::new(&mut self.inner);
-            let mut guard = ready!(pinned.poll_read_ready(cx)?);
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
 
-            match pinned.get_ref().accept() {
-                Err(e) if is_wouldblock(&e) => guard.clear_ready(),
-                Err(e) => return Poll::Ready(Err(e)),
-                Ok((sock, addr)) => {
+        loop {
+            let mut guard = ready!(Pin::new(&mut this.inner).poll_read_ready(cx)?);
+            let result = guard.try_io(|fd| fd.get_ref().accept());
+            match result {
+                Ok(Ok((sock, addr))) => {
                     let addr = unsafe { sockaddr_l2::try_from(addr) };
                     let addr = crate::Address::from(addr.unwrap().l2_bdaddr.b);
                     sock.set_nonblocking(true)?;
@@ -243,6 +224,8 @@ impl<'a> Future for Accept<'a> {
                     };
                     return Poll::Ready(Ok((sock, addr)));
                 }
+                Ok(Err(err)) => return Poll::Ready(Err(err)),
+                Err(..) => {}
             }
         }
     }
