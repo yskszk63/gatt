@@ -30,30 +30,30 @@ impl Extend<(Handle, Handle)> for FindByTypeValueResponse {
     }
 }
 
-impl FromIterator<(Handle, Bytes)> for ReadByTypeResponse {
-    fn from_iter<T: IntoIterator<Item = (Handle, Bytes)>>(iter: T) -> Self {
+impl FromIterator<(Handle, Box<[u8]>)> for ReadByTypeResponse {
+    fn from_iter<T: IntoIterator<Item = (Handle, Box<[u8]>)>>(iter: T) -> Self {
         Self {
             values: AttributeDataList(iter.into_iter().collect()),
         }
     }
 }
 
-impl Extend<(Handle, Bytes)> for ReadByTypeResponse {
-    fn extend<T: IntoIterator<Item = (Handle, Bytes)>>(&mut self, iter: T) {
+impl Extend<(Handle, Box<[u8]>)> for ReadByTypeResponse {
+    fn extend<T: IntoIterator<Item = (Handle, Box<[u8]>)>>(&mut self, iter: T) {
         self.values.0.extend(iter)
     }
 }
 
-impl FromIterator<(Handle, Handle, Bytes)> for ReadByGroupTypeResponse {
-    fn from_iter<T: IntoIterator<Item = (Handle, Handle, Bytes)>>(iter: T) -> Self {
+impl FromIterator<(Handle, Handle, Box<[u8]>)> for ReadByGroupTypeResponse {
+    fn from_iter<T: IntoIterator<Item = (Handle, Handle, Box<[u8]>)>>(iter: T) -> Self {
         Self {
             values: AttributeDataList(iter.into_iter().collect()),
         }
     }
 }
 
-impl Extend<(Handle, Handle, Bytes)> for ReadByGroupTypeResponse {
-    fn extend<T: IntoIterator<Item = (Handle, Handle, Bytes)>>(&mut self, iter: T) {
+impl Extend<(Handle, Handle, Box<[u8]>)> for ReadByGroupTypeResponse {
+    fn extend<T: IntoIterator<Item = (Handle, Handle, Box<[u8]>)>>(&mut self, iter: T) {
         self.values.0.extend(iter)
     }
 }

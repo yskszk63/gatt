@@ -1,14 +1,14 @@
-use std::future::Future;
 use std::io;
-use std::mem::{self, MaybeUninit};
+use std::mem;
+use std::net::Shutdown;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::pin::Pin;
-use std::ptr;
 use std::task::{Context, Poll};
 
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::io::unix::AsyncFd;
-use tokio::io::ReadBuf;
+use tokio::io::{ReadBuf, AsyncRead, AsyncWrite};
+use futures::Stream;
 
 // <bluetooth/bluetooth.h>
 const BTPROTO_L2CAP: libc::c_int = 0;
@@ -47,32 +47,6 @@ struct sockaddr_l2 {
     l2_bdaddr: bdaddr_t,
     l2_cid: libc::c_ushort,
     l2_bdaddr_type: u8,
-}
-
-impl sockaddr_l2 {
-    unsafe fn try_from(s: SockAddr) -> Option<Self> {
-        if s.family() != libc::AF_BLUETOOTH as libc::sa_family_t {
-            return None;
-        }
-        assert_eq!(s.len() as usize, mem::size_of::<Self>());
-
-        let mut result = MaybeUninit::<sockaddr_l2>::uninit();
-        ptr::copy_nonoverlapping(
-            s.as_ptr() as *const u8,
-            &mut result as *mut _ as *mut u8,
-            s.len() as usize,
-        );
-        Some(result.assume_init())
-    }
-}
-
-macro_rules! ready {
-    ($e:expr) => {
-        match $e {
-            Poll::Pending => return Poll::Pending,
-            Poll::Ready(e) => e,
-        }
-    };
 }
 
 fn sock_open() -> io::Result<Socket> {
@@ -122,108 +96,58 @@ fn set_sockopt_bt_security(fd: RawFd, level: u8, key_size: u8) -> io::Result<()>
 }
 
 #[derive(Debug)]
-pub(crate) struct Recv<'a, 'b> {
-    inner: &'a AsyncFd<Socket>,
-    buf: ReadBuf<'b>,
-}
-
-impl<'a, 'b> Future for Recv<'a, 'b> {
-    type Output = io::Result<usize>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let Self { inner, buf } = self.get_mut();
-
-        loop {
-            let mut guard = ready!(inner.poll_read_ready(cx)?);
-            let result = guard.try_io(|fd| fd.get_ref().recv(unsafe { buf.unfilled_mut() }));
-            match result {
-                Ok(Ok(ret)) => {
-                    unsafe { buf.assume_init(ret) };
-                    buf.advance(ret);
-                    return Poll::Ready(Ok(ret));
-                }
-                Ok(Err(err)) => return Poll::Ready(Err(err)),
-                Err(..) => {}
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct Send<'a, 'b> {
-    inner: &'a AsyncFd<Socket>,
-    buf: &'b [u8],
-}
-
-impl<'a, 'b> Future for Send<'a, 'b> {
-    type Output = io::Result<usize>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let Self { inner, buf } = self.get_mut();
-
-        loop {
-            let mut guard = ready!(inner.poll_write_ready(cx)?);
-            let result = guard.try_io(|fd| fd.get_ref().send(buf));
-            match result {
-                Ok(Ok(0)) => {
-                    return Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::WriteZero,
-                        "write zero.",
-                    )))
-                }
-                Ok(Ok(ret)) => return Poll::Ready(Ok(ret)),
-                Ok(Err(err)) => return Poll::Ready(Err(err)),
-                Err(..) => {}
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
 pub(crate) struct AttStream {
     inner: AsyncFd<Socket>,
 }
 
-impl AttStream {
-    pub(crate) fn recv<'b>(&self, buf: &'b mut [u8]) -> Recv<'_, 'b> {
-        Recv {
-            inner: &self.inner,
-            buf: ReadBuf::new(buf),
-        }
-    }
-
-    pub(crate) fn send<'b>(&self, buf: &'b [u8]) -> Send<'_, 'b> {
-        Send {
-            inner: &self.inner,
-            buf,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct Accept<'a> {
-    inner: &'a AsyncFd<Socket>,
-}
-
-impl<'a> Future for Accept<'a> {
-    type Output = io::Result<(AttStream, crate::Address)>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-
+impl AsyncRead for AttStream {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
         loop {
-            let mut guard = ready!(Pin::new(&mut this.inner).poll_read_ready(cx)?);
-            let result = guard.try_io(|fd| fd.get_ref().accept());
+            let mut guard = match self.inner.poll_read_ready(cx)? {
+                Poll::Ready(guard) => guard,
+                Poll::Pending => return Poll::Pending,
+            };
+            let result = guard.try_io(|fd| fd.get_ref().recv(unsafe { buf.unfilled_mut() }));
             match result {
-                Ok(Ok((sock, addr))) => {
-                    let addr = unsafe { sockaddr_l2::try_from(addr) };
-                    let addr = crate::Address::from(addr.unwrap().l2_bdaddr.b);
-                    sock.set_nonblocking(true)?;
-                    let sock = AttStream {
-                        inner: AsyncFd::new(sock)?,
-                    };
-                    return Poll::Ready(Ok((sock, addr)));
+                Ok(Ok(n)) => {
+                    unsafe { buf.assume_init(n) };
+                    buf.advance(n);
+                    return Poll::Ready(Ok(()));
                 }
+                Ok(Err(err)) => return Poll::Ready(Err(err)),
+                Err(..) => {}
+            }
+        }
+    }
+}
+
+impl AsyncWrite for AttStream {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize, io::Error>> {
+        loop {
+            let mut guard = match self.inner.poll_write_ready(cx)? {
+                Poll::Ready(guard) => guard,
+                Poll::Pending => return Poll::Pending,
+            };
+            let result = guard.try_io(|fd| fd.get_ref().send(buf));
+            match result {
+                Ok(Ok(n)) => return Poll::Ready(Ok(n)),
+                Ok(Err(err)) => return Poll::Ready(Err(err)),
+                Err(..) => {}
+            }
+        }
+    }
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        Poll::Ready(Ok(()))
+    }
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        loop {
+            let mut guard = match self.inner.poll_write_ready(cx)? {
+                Poll::Ready(guard) => guard,
+                Poll::Pending => return Poll::Pending,
+            };
+            let result = guard.try_io(|fd| fd.get_ref().shutdown(Shutdown::Write));
+            match result {
+                Ok(Ok(n)) => return Poll::Ready(Ok(n)),
                 Ok(Err(err)) => return Poll::Ready(Err(err)),
                 Err(..) => {}
             }
@@ -249,8 +173,29 @@ impl AttListener {
     pub(crate) fn set_sockopt_bt_security(&self, level: u8, key_size: u8) -> io::Result<()> {
         set_sockopt_bt_security(self.inner.as_raw_fd(), level, key_size)
     }
+}
 
-    pub(crate) fn accept(&self) -> Accept {
-        Accept { inner: &self.inner }
+impl Stream for AttListener {
+    type Item = io::Result<AttStream>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        loop {
+            let mut guard = match self.inner.poll_read_ready(cx)? {
+                Poll::Ready(guard) => guard,
+                Poll::Pending => return Poll::Pending,
+            };
+            let result = guard.try_io(|fd| fd.get_ref().accept());
+            match result {
+                Ok(Ok((sock, _))) => {
+                    sock.set_nonblocking(true)?;
+                    let sock = AttStream {
+                        inner: AsyncFd::new(sock)?,
+                    };
+                    return Poll::Ready(Some(Ok(sock)));
+                }
+                Ok(Err(err)) => return Poll::Ready(Some(Err(err))),
+                Err(..) => {}
+            }
+        }
     }
 }

@@ -1,5 +1,3 @@
-use bytes::Bytes;
-
 use crate::{Handle, Uuid};
 
 pub(crate) trait Size {
@@ -21,7 +19,7 @@ impl Size for Uuid {
     }
 }
 
-impl Size for Bytes {
+impl Size for Box<[u8]> {
     fn size(&self) -> usize {
         self.len()
     }

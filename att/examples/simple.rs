@@ -32,8 +32,8 @@ impl Handler for MyHandler {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
-    let server = Server::new()?;
-    let connection = server.accept().await?;
+    let mut server = Server::new()?;
+    let connection = server.accept().await?.unwrap();
     connection.run(MyHandler).await?;
     Ok(())
 }

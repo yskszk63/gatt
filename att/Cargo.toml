@@ -19,8 +19,10 @@ derive-new = "0.5"
 getset = "0.1"
 log = "0.4"
 bdaddr = "0.1"
+futures = "0.3.15"
 
 [dev-dependencies]
 anyhow = "1.0"
 pretty_env_logger = "0.4.0"
 tokio = { version = "1.8", features = ["rt", "macros"] }
+tokio-test = "0.4.2"

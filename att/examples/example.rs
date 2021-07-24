@@ -181,7 +181,7 @@ async fn main() -> anyhow::Result<()> {
 
     let server = Server::new()?;
     //server.needs_bond_mitm()?;
-    let connection = server.accept().await?;
+    let connection = server.accept().await?.unwrap();
     let outbound = connection.outgoing();
 
     let mut task = tokio::spawn(connection.run(H));

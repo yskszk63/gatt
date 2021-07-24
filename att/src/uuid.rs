@@ -1,10 +1,10 @@
 //! ATT Protocol UUIDs.
 use std::fmt;
+use std::io;
 
-use bytes::{Buf, BytesMut};
 pub use uuid::Uuid as Uuid128;
 
-use crate::pack::{Error as UnpackError, Pack, Unpack};
+use crate::packet::pack::{Error as PackError, Pack, Result as PackResult, Unpack};
 
 packable_newtype! {
     /// 16bit UUID
@@ -47,14 +47,14 @@ impl From<Uuid16> for Uuid {
 }
 
 impl Pack for Uuid128 {
-    fn pack(self, buf: &mut BytesMut) {
-        self.to_u128_le().pack(buf);
+    fn pack<W>(self, write: &mut W) -> PackResult<()> where W: io::Write {
+        self.to_u128_le().pack(write)
     }
 }
 
 impl Unpack for Uuid128 {
-    fn unpack<B: Buf>(buf: &mut B) -> Result<Self, UnpackError> {
-        Ok(Self::from_u128_le(Unpack::unpack(buf)?))
+    fn unpack<R>(read: &mut R) -> PackResult<Self> where R: io::Read {
+        Ok(Self::from_u128_le(Unpack::unpack(read)?))
     }
 }
 
@@ -84,20 +84,24 @@ impl Uuid {
 }
 
 impl Pack for Uuid {
-    fn pack(self, buf: &mut BytesMut) {
+    fn pack<W>(self, write: &mut W) -> PackResult<()>
+    where
+        W: io::Write,
+    {
         match self {
-            Self::Uuid16(uuid) => uuid.pack(buf),
-            Self::Uuid128(uuid) => uuid.pack(buf),
+            Self::Uuid16(uuid) => uuid.pack(write),
+            Self::Uuid128(uuid) => uuid.pack(write),
         }
     }
 }
 
 impl Unpack for Uuid {
-    fn unpack<B: Buf>(buf: &mut B) -> Result<Self, UnpackError> {
-        match buf.remaining() {
-            2 => Ok(Self::Uuid16(Unpack::unpack(buf)?)),
-            16 => Ok(Self::Uuid128(Unpack::unpack(buf)?)),
-            v => Err(UnpackError::Unexpected(format!("unexpected length {}", v))),
-        }
+    fn unpack<R>(read: &mut R) -> PackResult<Self> where R: io::Read, {
+        let buf = Box::<[u8]>::unpack(read)?;
+        Ok(match buf.len() {
+            2 => Self::Uuid16(Unpack::unpack(read)?),
+            16 => Self::Uuid128(Unpack::unpack(read)?),
+            unknown => return Err(PackError::Unexpected(format!("uuid length {}", unknown))),
+        })
     }
 }
