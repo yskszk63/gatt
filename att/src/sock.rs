@@ -5,10 +5,10 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use futures::Stream;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::io::unix::AsyncFd;
-use tokio::io::{ReadBuf, AsyncRead, AsyncWrite};
-use futures::Stream;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 // <bluetooth/bluetooth.h>
 const BTPROTO_L2CAP: libc::c_int = 0;
@@ -101,7 +101,11 @@ pub(crate) struct AttStream {
 }
 
 impl AsyncRead for AttStream {
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
         loop {
             let mut guard = match self.inner.poll_read_ready(cx)? {
                 Poll::Ready(guard) => guard,
@@ -122,7 +126,11 @@ impl AsyncRead for AttStream {
 }
 
 impl AsyncWrite for AttStream {
-    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize, io::Error>> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, io::Error>> {
         loop {
             let mut guard = match self.inner.poll_write_ready(cx)? {
                 Poll::Ready(guard) => guard,

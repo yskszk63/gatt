@@ -1,7 +1,7 @@
 use std::io::stdin;
 
-use tokio::task::spawn_blocking;
 use tokio::io::AsyncWriteExt;
+use tokio::task::spawn_blocking;
 
 use att::packet as pkt;
 use att::server::*;

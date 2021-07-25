@@ -91,4 +91,3 @@ macro_rules! packable_struct {
         }
     }
 }
-

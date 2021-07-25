@@ -72,7 +72,7 @@
 pub use crate::uuid::Uuid;
 pub use bdaddr::Address;
 pub use handle::Handle;
-pub use handler::{Handler, ErrorResponse};
+pub use handler::{ErrorResponse, Handler};
 pub use server::Server;
 
 #[macro_use]

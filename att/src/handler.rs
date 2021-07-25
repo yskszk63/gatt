@@ -146,5 +146,3 @@ pub trait Handler {
         // nop
     }
 }
-
-

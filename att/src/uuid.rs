@@ -47,13 +47,19 @@ impl From<Uuid16> for Uuid {
 }
 
 impl Pack for Uuid128 {
-    fn pack<W>(self, write: &mut W) -> PackResult<()> where W: io::Write {
+    fn pack<W>(self, write: &mut W) -> PackResult<()>
+    where
+        W: io::Write,
+    {
         self.to_u128_le().pack(write)
     }
 }
 
 impl Unpack for Uuid128 {
-    fn unpack<R>(read: &mut R) -> PackResult<Self> where R: io::Read {
+    fn unpack<R>(read: &mut R) -> PackResult<Self>
+    where
+        R: io::Read,
+    {
         Ok(Self::from_u128_le(Unpack::unpack(read)?))
     }
 }
@@ -96,7 +102,10 @@ impl Pack for Uuid {
 }
 
 impl Unpack for Uuid {
-    fn unpack<R>(read: &mut R) -> PackResult<Self> where R: io::Read, {
+    fn unpack<R>(read: &mut R) -> PackResult<Self>
+    where
+        R: io::Read,
+    {
         let buf = Box::<[u8]>::unpack(read)?;
         Ok(match buf.len() {
             2 => Self::Uuid16(Unpack::unpack(read)?),

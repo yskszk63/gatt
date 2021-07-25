@@ -9,7 +9,7 @@ use getset::Getters;
 use crate::size::Size;
 use crate::uuid::Uuid16;
 use crate::{Handle, Uuid};
-use pack::{Result as PackResult, Pack, Unpack, Error as PackError};
+use pack::{Error as PackError, Pack, Result as PackResult, Unpack};
 
 #[macro_use]
 pub(crate) mod pack;
@@ -68,7 +68,10 @@ pub enum ErrorCode {
 }
 
 impl Pack for ErrorCode {
-    fn pack<W>(self, write: &mut W) -> PackResult<()> where W: io::Write {
+    fn pack<W>(self, write: &mut W) -> PackResult<()>
+    where
+        W: io::Write,
+    {
         let v = match self {
             Self::InvalidHandle => 0x01,
             Self::ReadNotPermitted => 0x02,
@@ -98,7 +101,10 @@ impl Pack for ErrorCode {
 }
 
 impl Unpack for ErrorCode {
-    fn unpack<R>(read: &mut R) -> PackResult<Self> where R: io::Read {
+    fn unpack<R>(read: &mut R) -> PackResult<Self>
+    where
+        R: io::Read,
+    {
         Ok(match u8::unpack(read)? {
             0x01 => Self::InvalidHandle,
             0x02 => Self::ReadNotPermitted,
@@ -130,13 +136,19 @@ impl Unpack for ErrorCode {
 struct HandlesInformationList(Vec<(Handle, Handle)>);
 
 impl Pack for HandlesInformationList {
-    fn pack<W>(self, write: &mut W) -> PackResult<()> where W: io::Write {
+    fn pack<W>(self, write: &mut W) -> PackResult<()>
+    where
+        W: io::Write,
+    {
         pack::RemainingVec(self.0).pack(write)
     }
 }
 
 impl Unpack for HandlesInformationList {
-    fn unpack<R>(read: &mut R) -> PackResult<Self> where R: io::Read {
+    fn unpack<R>(read: &mut R) -> PackResult<Self>
+    where
+        R: io::Read,
+    {
         let v = pack::RemainingVec::<(Handle, Handle)>::unpack(read)?;
         Ok(Self(v.0))
     }
@@ -154,13 +166,19 @@ impl<'a> IntoIterator for &'a SetOfHandles {
 }
 
 impl Pack for SetOfHandles {
-    fn pack<W>(self, write: &mut W) -> PackResult<()> where W: io::Write {
+    fn pack<W>(self, write: &mut W) -> PackResult<()>
+    where
+        W: io::Write,
+    {
         pack::RemainingVec(self.0).pack(write)
     }
 }
 
 impl Unpack for SetOfHandles {
-    fn unpack<R>(read: &mut R) -> PackResult<Self> where R: io::Read {
+    fn unpack<R>(read: &mut R) -> PackResult<Self>
+    where
+        R: io::Read,
+    {
         let v = pack::RemainingVec::<Handle>::unpack(read)?;
         Ok(Self(v.0))
     }
@@ -170,7 +188,10 @@ impl Unpack for SetOfHandles {
 struct AttributeDataList<T>(Vec<T>);
 
 impl Pack for AttributeDataList<(Handle, Uuid)> {
-    fn pack<W>(self, write: &mut W) -> PackResult<()> where W: io::Write {
+    fn pack<W>(self, write: &mut W) -> PackResult<()>
+    where
+        W: io::Write,
+    {
         let mut iter = self.0.into_iter();
         let head = if let Some(head) = iter.next() {
             head
@@ -203,7 +224,10 @@ impl Pack for AttributeDataList<(Handle, Uuid)> {
 }
 
 impl Unpack for AttributeDataList<(Handle, Uuid)> {
-    fn unpack<R>(read: &mut R) -> PackResult<Self> where R: io::Read {
+    fn unpack<R>(read: &mut R) -> PackResult<Self>
+    where
+        R: io::Read,
+    {
         let format = u8::unpack(read)?;
 
         let mut v = vec![];
@@ -225,7 +249,10 @@ impl Unpack for AttributeDataList<(Handle, Uuid)> {
 }
 
 impl Pack for AttributeDataList<(Handle, Box<[u8]>)> {
-    fn pack<W>(self, write: &mut W) -> PackResult<()> where W: io::Write {
+    fn pack<W>(self, write: &mut W) -> PackResult<()>
+    where
+        W: io::Write,
+    {
         let mut iter = self.0.into_iter();
         let head = if let Some(head) = iter.next() {
             head
@@ -253,7 +280,10 @@ impl Pack for AttributeDataList<(Handle, Box<[u8]>)> {
 }
 
 impl Unpack for AttributeDataList<(Handle, Box<[u8]>)> {
-    fn unpack<R>(read: &mut R) -> PackResult<Self> where R: io::Read {
+    fn unpack<R>(read: &mut R) -> PackResult<Self>
+    where
+        R: io::Read,
+    {
         let len = u8::unpack(read)? as usize;
         let mut v = vec![];
         loop {
@@ -271,7 +301,10 @@ impl Unpack for AttributeDataList<(Handle, Box<[u8]>)> {
 }
 
 impl Pack for AttributeDataList<(Handle, Handle, Box<[u8]>)> {
-    fn pack<W>(self, write: &mut W) -> PackResult<()> where W: io::Write {
+    fn pack<W>(self, write: &mut W) -> PackResult<()>
+    where
+        W: io::Write,
+    {
         let mut iter = self.0.into_iter();
         let head = if let Some(head) = iter.next() {
             head
@@ -280,7 +313,9 @@ impl Pack for AttributeDataList<(Handle, Handle, Box<[u8]>)> {
         };
         let len = head.2.len();
 
-        let pack_data = |(handle1, handle2, data): (Handle, Handle, Box<[u8]>), write: &mut W| -> PackResult<()> {
+        let pack_data = |(handle1, handle2, data): (Handle, Handle, Box<[u8]>),
+                         write: &mut W|
+         -> PackResult<()> {
             if data.len() != len {
                 panic!()
             }
@@ -300,7 +335,10 @@ impl Pack for AttributeDataList<(Handle, Handle, Box<[u8]>)> {
 }
 
 impl Unpack for AttributeDataList<(Handle, Handle, Box<[u8]>)> {
-    fn unpack<R>(read: &mut R) -> PackResult<Self> where R: io::Read {
+    fn unpack<R>(read: &mut R) -> PackResult<Self>
+    where
+        R: io::Read,
+    {
         let len = u8::unpack(read)? as usize;
         let mut v = vec![];
         loop {
@@ -629,7 +667,7 @@ macro_rules! device_send {
     }
 }
 
-device_recv! [
+device_recv![
     ExchangeMtuRequest,
     FindInformationRequest,
     FindByTypeValueRequest,
@@ -646,7 +684,7 @@ device_recv! [
     HandleValueConfirmation,
 ];
 
-device_send! [
+device_send![
     ErrorResponse,
     ExchangeMtuResponse,
     FindInformationResponse,
@@ -664,7 +702,9 @@ device_send! [
 ];
 
 pub trait DeviceSend {
-    fn pack_with_code<W>(self, write: &mut W) -> PackResult<()> where W: io::Write;
+    fn pack_with_code<W>(self, write: &mut W) -> PackResult<()>
+    where
+        W: io::Write;
 }
 
 /// ATT Request

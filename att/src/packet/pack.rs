@@ -15,11 +15,15 @@ pub enum Error {
 pub type Result<R> = std::result::Result<R, Error>;
 
 pub trait Pack {
-    fn pack<W>(self, write: &mut W) -> Result<()> where W: io::Write;
+    fn pack<W>(self, write: &mut W) -> Result<()>
+    where
+        W: io::Write;
 }
 
 pub trait Unpack: Sized {
-    fn unpack<R>(read: &mut R) -> Result<Self> where R: io::Read;
+    fn unpack<R>(read: &mut R) -> Result<Self>
+    where
+        R: io::Read;
 }
 
 fn fill<R>(mut this: R, mut buf: &mut [u8]) -> Result<()>
@@ -49,26 +53,38 @@ where
     }
 }
 impl Pack for () {
-    fn pack<W>(self, _: &mut W) -> Result<()> where W: io::Write {
+    fn pack<W>(self, _: &mut W) -> Result<()>
+    where
+        W: io::Write,
+    {
         Ok(())
     }
 }
 
 impl Unpack for () {
-    fn unpack<R>(_: &mut R) -> Result<Self> where R: io::Read {
+    fn unpack<R>(_: &mut R) -> Result<Self>
+    where
+        R: io::Read,
+    {
         Ok(())
     }
 }
 
 impl<const N: usize> Pack for [u8; N] {
-    fn pack<W>(self, write: &mut W) -> Result<()> where W: io::Write {
+    fn pack<W>(self, write: &mut W) -> Result<()>
+    where
+        W: io::Write,
+    {
         write.write_all(&self)?;
         Ok(())
     }
 }
 
 impl<const N: usize> Unpack for [u8; N] {
-    fn unpack<R>(read: &mut R) -> Result<Self> where R: io::Read {
+    fn unpack<R>(read: &mut R) -> Result<Self>
+    where
+        R: io::Read,
+    {
         let mut this = [0; N];
         fill(read, &mut this)?;
         Ok(this)
@@ -76,68 +92,103 @@ impl<const N: usize> Unpack for [u8; N] {
 }
 
 impl Pack for bool {
-    fn pack<W>(self, write: &mut W) -> Result<()> where W: io::Write {
+    fn pack<W>(self, write: &mut W) -> Result<()>
+    where
+        W: io::Write,
+    {
         (if self { 1u8 } else { 0 }).pack(write)
     }
 }
 
 impl Unpack for bool {
-    fn unpack<R>(read: &mut R) -> Result<Self> where R: io::Read {
+    fn unpack<R>(read: &mut R) -> Result<Self>
+    where
+        R: io::Read,
+    {
         Ok(u8::unpack(read)? != 0)
     }
 }
 
 impl Pack for u8 {
-    fn pack<W>(self, write: &mut W) -> Result<()> where W: io::Write {
+    fn pack<W>(self, write: &mut W) -> Result<()>
+    where
+        W: io::Write,
+    {
         self.to_le_bytes().pack(write)
     }
 }
 
 impl Unpack for u8 {
-    fn unpack<R>(read: &mut R) -> Result<Self> where R: io::Read {
+    fn unpack<R>(read: &mut R) -> Result<Self>
+    where
+        R: io::Read,
+    {
         Ok(Self::from_le_bytes(Unpack::unpack(read)?))
     }
 }
 
 impl Pack for u16 {
-    fn pack<W>(self, write: &mut W) -> Result<()> where W: io::Write {
+    fn pack<W>(self, write: &mut W) -> Result<()>
+    where
+        W: io::Write,
+    {
         self.to_le_bytes().pack(write)
     }
 }
 
 impl Unpack for u16 {
-    fn unpack<R>(read: &mut R) -> Result<Self> where R: io::Read {
+    fn unpack<R>(read: &mut R) -> Result<Self>
+    where
+        R: io::Read,
+    {
         Ok(Self::from_le_bytes(Unpack::unpack(read)?))
     }
 }
 
 impl Pack for u32 {
-    fn pack<W>(self, write: &mut W) -> Result<()> where W: io::Write {
+    fn pack<W>(self, write: &mut W) -> Result<()>
+    where
+        W: io::Write,
+    {
         self.to_le_bytes().pack(write)
     }
 }
 
 impl Unpack for u32 {
-    fn unpack<R>(read: &mut R) -> Result<Self> where R: io::Read {
+    fn unpack<R>(read: &mut R) -> Result<Self>
+    where
+        R: io::Read,
+    {
         Ok(Self::from_le_bytes(Unpack::unpack(read)?))
     }
 }
 
 impl Pack for u128 {
-    fn pack<W>(self, write: &mut W) -> Result<()> where W: io::Write {
+    fn pack<W>(self, write: &mut W) -> Result<()>
+    where
+        W: io::Write,
+    {
         self.to_le_bytes().pack(write)
     }
 }
 
 impl Unpack for u128 {
-    fn unpack<R>(read: &mut R) -> Result<Self> where R: io::Read {
+    fn unpack<R>(read: &mut R) -> Result<Self>
+    where
+        R: io::Read,
+    {
         Ok(Self::from_le_bytes(Unpack::unpack(read)?))
     }
 }
 
-impl<P> Pack for Option<P> where P: Pack {
+impl<P> Pack for Option<P>
+where
+    P: Pack,
+{
     fn pack<W>(self, write: &mut W) -> Result<()>
-    where W: io::Write {
+    where
+        W: io::Write,
+    {
         if let Some(v) = self {
             v.pack(write)?;
         }
@@ -145,9 +196,14 @@ impl<P> Pack for Option<P> where P: Pack {
     }
 }
 
-impl<P> Unpack for Option<P> where P: Unpack {
+impl<P> Unpack for Option<P>
+where
+    P: Unpack,
+{
     fn unpack<R>(read: &mut R) -> Result<Self>
-    where R: io::Read {
+    where
+        R: io::Read,
+    {
         match P::unpack(read) {
             Ok(v) => Ok(Some(v)),
             Err(Error::NoDataAvailable) => Ok(None),
@@ -156,9 +212,14 @@ impl<P> Unpack for Option<P> where P: Unpack {
     }
 }
 
-impl<P> Pack for Vec<P> where P: Pack {
+impl<P> Pack for Vec<P>
+where
+    P: Pack,
+{
     fn pack<W>(self, write: &mut W) -> Result<()>
-    where W: io::Write {
+    where
+        W: io::Write,
+    {
         (self.len() as u16).pack(write)?;
         for item in self {
             item.pack(write)?;
@@ -167,23 +228,34 @@ impl<P> Pack for Vec<P> where P: Pack {
     }
 }
 
-impl<P> Unpack for Vec<P> where P: Unpack {
+impl<P> Unpack for Vec<P>
+where
+    P: Unpack,
+{
     fn unpack<R>(read: &mut R) -> Result<Self>
-    where R: io::Read {
+    where
+        R: io::Read,
+    {
         let len = u16::unpack(read)?;
         (0..len).map(|_| P::unpack(read)).collect()
     }
 }
 
 impl Pack for Box<[u8]> {
-    fn pack<W>(self, write: &mut W) -> Result<()> where W: io::Write {
+    fn pack<W>(self, write: &mut W) -> Result<()>
+    where
+        W: io::Write,
+    {
         write.write_all(&self)?;
         Ok(())
     }
 }
 
 impl Unpack for Box<[u8]> {
-    fn unpack<R>(read: &mut R) -> Result<Self> where R: io::Read {
+    fn unpack<R>(read: &mut R) -> Result<Self>
+    where
+        R: io::Read,
+    {
         let mut buf = vec![];
         read.read_to_end(&mut buf)?;
         Ok(buf.into_boxed_slice())
@@ -215,8 +287,14 @@ impl_tuple!(p1: P1, p2: P2, p3: P3);
 
 pub struct RemainingVec<I>(pub Vec<I>);
 
-impl<I> Pack for RemainingVec<I> where I: Pack {
-    fn pack<W>(self, write: &mut W) -> Result<()> where W: io::Write {
+impl<I> Pack for RemainingVec<I>
+where
+    I: Pack,
+{
+    fn pack<W>(self, write: &mut W) -> Result<()>
+    where
+        W: io::Write,
+    {
         for item in self.0 {
             item.pack(write)?;
         }
@@ -224,8 +302,14 @@ impl<I> Pack for RemainingVec<I> where I: Pack {
     }
 }
 
-impl<I> Unpack for RemainingVec<I> where I: Unpack {
-    fn unpack<R>(read: &mut R) -> Result<Self> where R: io::Read {
+impl<I> Unpack for RemainingVec<I>
+where
+    I: Unpack,
+{
+    fn unpack<R>(read: &mut R) -> Result<Self>
+    where
+        R: io::Read,
+    {
         let mut v = vec![];
         loop {
             match I::unpack(read) {
