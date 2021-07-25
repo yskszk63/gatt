@@ -198,7 +198,7 @@ where
         loop {
             match &state {
                 NotificationState::Write => {
-                    match Sink::<pkt::HandleValueNotification>::poll_ready(
+                    match Sink::<pkt::HandleValueNotificationBorrow>::poll_ready(
                         Pin::new(&mut guard.stream),
                         cx,
                     ) {
@@ -208,7 +208,7 @@ where
                         }
                         Poll::Pending => return Poll::Pending,
                     }
-                    let item = pkt::HandleValueNotification::new(handle.clone(), buf.into());
+                    let item = pkt::HandleValueNotificationBorrow::new(handle.clone(), buf);
                     match Pin::new(&mut guard.stream).start_send(item) {
                         Ok(()) => *state = NotificationState::NeedFlush(buf.len()),
                         Err(err) => {
@@ -218,7 +218,7 @@ where
                 }
 
                 NotificationState::NeedFlush(len) => {
-                    match Sink::<pkt::HandleValueNotification>::poll_flush(
+                    match Sink::<pkt::HandleValueNotificationBorrow>::poll_flush(
                         Pin::new(&mut guard.stream),
                         cx,
                     ) {
@@ -247,7 +247,10 @@ where
             Poll::Ready(guard) => guard,
             Poll::Pending => return Poll::Pending,
         };
-        match Sink::<pkt::HandleValueNotification>::poll_close(Pin::new(&mut guard.stream), cx) {
+        match Sink::<pkt::HandleValueNotificationBorrow>::poll_close(
+            Pin::new(&mut guard.stream),
+            cx,
+        ) {
             Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
             Poll::Ready(Err(err)) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err))),
             Poll::Pending => Poll::Pending,
@@ -290,7 +293,7 @@ where
         loop {
             match state {
                 IndicationState::Write => {
-                    match Sink::<pkt::HandleValueIndication>::poll_ready(
+                    match Sink::<pkt::HandleValueIndicationBorrow>::poll_ready(
                         Pin::new(&mut guard.stream),
                         cx,
                     ) {
@@ -300,7 +303,7 @@ where
                         }
                         Poll::Pending => return Poll::Pending,
                     }
-                    let item = pkt::HandleValueIndication::new(handle.clone(), buf.into());
+                    let item = pkt::HandleValueIndicationBorrow::new(handle.clone(), buf);
                     match Pin::new(&mut guard.stream).start_send(item) {
                         Ok(()) => *state = IndicationState::NeedFlush(buf.len()),
                         Err(err) => {
@@ -310,7 +313,7 @@ where
                 }
 
                 IndicationState::NeedFlush(len) => {
-                    match Sink::<pkt::HandleValueIndication>::poll_flush(
+                    match Sink::<pkt::HandleValueIndicationBorrow>::poll_flush(
                         Pin::new(&mut guard.stream),
                         cx,
                     ) {
@@ -351,7 +354,8 @@ where
             Poll::Ready(guard) => guard,
             Poll::Pending => return Poll::Pending,
         };
-        match Sink::<pkt::HandleValueIndication>::poll_close(Pin::new(&mut guard.stream), cx) {
+        match Sink::<pkt::HandleValueIndicationBorrow>::poll_close(Pin::new(&mut guard.stream), cx)
+        {
             Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
             Poll::Ready(Err(err)) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err))),
             Poll::Pending => Poll::Pending,

@@ -12,7 +12,6 @@ keywords = ["bluetooth"]
 libc = "0.2"
 socket2 = { version = "0.4", features = ["all"] }
 tokio = { version = "1.8", features = ["net"] }
-bytes = "1.0"
 thiserror = "1.0"
 uuid = "0.8"
 derive-new = "0.5"

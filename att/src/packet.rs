@@ -393,17 +393,11 @@ macro_rules! packet {
         }
 
         /// ATT Packet
-        pub trait Packet: Pack + Unpack {
+        pub trait Packet {
             const OPCODE: OpCode;
 
             fn opcode() -> OpCode {
                 Self::OPCODE
-            }
-
-            fn pack_with_code<W>(self, write: &mut W) -> PackResult<()> where W: io::Write {
-                Self::OPCODE.pack(write)?;
-                self.pack(write)?;
-                Ok(())
             }
         }
 
@@ -626,7 +620,11 @@ macro_rules! device_recv {
             $( $ident($ident), )*
         }
 
+        trait AssertUnpack: Packet + Unpack + Sized {}
+
         $(
+            impl AssertUnpack for $ident {}
+
             impl From<$ident> for DeviceRecv {
                 fn from(v: $ident) -> Self {
                     Self::$ident(v)
@@ -658,11 +656,7 @@ macro_rules! device_recv {
 macro_rules! device_send {
     ( $( $ident:ident, )* ) => {
         $(
-            impl DeviceSend for $ident {
-                fn pack_with_code<W>(self, write: &mut W) -> PackResult<()> where W: io::Write {
-                    <Self as Packet>::pack_with_code(self, write)
-                }
-            }
+            impl DeviceSend for $ident { }
         )*
     }
 }
@@ -701,10 +695,15 @@ device_send![
     HandleValueIndication,
 ];
 
-pub trait DeviceSend {
+pub trait DeviceSend: Packet + Pack + Sized {
     fn pack_with_code<W>(self, write: &mut W) -> PackResult<()>
     where
-        W: io::Write;
+        W: io::Write,
+    {
+        Self::OPCODE.pack(write)?;
+        self.pack(write)?;
+        Ok(())
+    }
 }
 
 /// ATT Request
@@ -887,6 +886,54 @@ impl Indication for HandleValueIndication {
 impl Confirmation for HandleValueConfirmation {}
 
 impl Command for SignedWriteCommand {}
+
+/// Handle Value Notification
+#[derive(Debug, New)]
+pub struct HandleValueNotificationBorrow<'a>(Handle, &'a [u8]);
+
+impl<'a> Packet for HandleValueNotificationBorrow<'a> {
+    const OPCODE: OpCode = HandleValueNotification::OPCODE;
+}
+
+impl<'a> Pack for HandleValueNotificationBorrow<'a> {
+    fn pack<W>(self, write: &mut W) -> PackResult<()>
+    where
+        W: io::Write,
+    {
+        self.0.pack(write)?;
+        write.write_all(&self.1)?;
+        Ok(())
+    }
+}
+
+impl<'a> DeviceSend for HandleValueNotificationBorrow<'a> {}
+
+impl<'a> Notification for HandleValueNotificationBorrow<'a> {}
+
+/// Handle Value Indication
+#[derive(Debug, New)]
+pub struct HandleValueIndicationBorrow<'a>(Handle, &'a [u8]);
+
+impl<'a> Packet for HandleValueIndicationBorrow<'a> {
+    const OPCODE: OpCode = HandleValueIndication::OPCODE;
+}
+
+impl<'a> Pack for HandleValueIndicationBorrow<'a> {
+    fn pack<W>(self, write: &mut W) -> PackResult<()>
+    where
+        W: io::Write,
+    {
+        self.0.pack(write)?;
+        write.write_all(&self.1)?;
+        Ok(())
+    }
+}
+
+impl<'a> DeviceSend for HandleValueIndicationBorrow<'a> {}
+
+impl<'a> Indication for HandleValueNotificationBorrow<'a> {
+    type Confirmation = HandleValueConfirmation;
+}
 
 #[cfg(test)]
 mod tests {
