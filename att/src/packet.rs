@@ -1,5 +1,6 @@
 //! ATT Protocol Packet
 use std::convert::TryFrom;
+use std::fmt;
 use std::io;
 
 use derive_new::new as New;
@@ -393,7 +394,7 @@ macro_rules! packet {
         }
 
         /// ATT Packet
-        pub trait Packet {
+        pub trait Packet: fmt::Debug {
             const OPCODE: OpCode;
 
             fn opcode() -> OpCode {

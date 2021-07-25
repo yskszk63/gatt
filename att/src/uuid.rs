@@ -108,8 +108,8 @@ impl Unpack for Uuid {
     {
         let buf = Box::<[u8]>::unpack(read)?;
         Ok(match buf.len() {
-            2 => Self::Uuid16(Unpack::unpack(read)?),
-            16 => Self::Uuid128(Unpack::unpack(read)?),
+            2 => Self::Uuid16(Unpack::unpack(&mut buf.as_ref())?),
+            16 => Self::Uuid128(Unpack::unpack(&mut buf.as_ref())?),
             unknown => return Err(PackError::Unexpected(format!("uuid length {}", unknown))),
         })
     }

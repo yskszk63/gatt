@@ -84,7 +84,9 @@ where
         if filled.is_empty() {
             Poll::Ready(None)
         } else {
-            Poll::Ready(Some(Ok(Unpack::unpack(&mut filled)?)))
+            let item = Unpack::unpack(&mut filled)?;
+            log::trace!("packet recv {:?}", item);
+            Poll::Ready(Some(Ok(item)))
         }
     }
 }
@@ -108,6 +110,7 @@ where
 
     fn start_send(self: Pin<&mut Self>, item: S) -> Result<()> {
         let Self { txlen, txbuf, .. } = self.get_mut();
+        log::trace!("packet send {:?}", item);
 
         let mut write = txbuf.as_mut();
         let len = write.len();
@@ -623,7 +626,9 @@ impl Connection {
     where
         H: crate::Handler,
     {
+        log::debug!("Start serving.");
         self.inner.run(handler).await?;
+        log::debug!("Done serving.");
         Ok(())
     }
 }
@@ -655,6 +660,7 @@ impl Server {
 
     pub async fn accept(&mut self) -> io::Result<Option<Connection>> {
         if let Some(connection) = self.inner.accept().await? {
+            log::debug!("Connection accepted.");
             Ok(Some(Connection { inner: connection }))
         } else {
             Ok(None)
