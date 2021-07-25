@@ -196,7 +196,7 @@ impl Pack for AttributeDataList<(Handle, Uuid)> {
         let head = if let Some(head) = iter.next() {
             head
         } else {
-            return (0 as u8).pack(write);
+            return 0u8.pack(write);
         };
         let format = match &head.1 {
             Uuid::Uuid16(_) => 0x01u8,
@@ -257,7 +257,7 @@ impl Pack for AttributeDataList<(Handle, Box<[u8]>)> {
         let head = if let Some(head) = iter.next() {
             head
         } else {
-            return (0 as u8).pack(write);
+            return 0u8.pack(write);
         };
         let len = head.1.len();
 
@@ -309,7 +309,7 @@ impl Pack for AttributeDataList<(Handle, Handle, Box<[u8]>)> {
         let head = if let Some(head) = iter.next() {
             head
         } else {
-            return (0 as u8).pack(write);
+            return 0u8.pack(write);
         };
         let len = head.2.len();
 

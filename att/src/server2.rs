@@ -50,6 +50,20 @@ impl<R> PacketStream<R> {
     fn txmtu(&self) -> usize {
         self.txbuf.len()
     }
+
+    fn set_txmtu(&mut self, mtu: usize) {
+        let mut buf = vec![0; mtu];
+        let len = mtu.min(self.txbuf.len());
+        (&mut buf[..len]).copy_from_slice(&self.txbuf[..len]);
+        self.txbuf = buf.into();
+    }
+
+    fn set_rxmtu(&mut self, mtu: usize) {
+        let mut buf = vec![0; mtu];
+        let len = mtu.min(self.rxbuf.len());
+        (&mut buf[..len]).copy_from_slice(&self.rxbuf[..len]);
+        self.rxbuf = buf.into();
+    }
 }
 
 impl<R> Stream for PacketStream<R>
@@ -235,9 +249,7 @@ where
         };
         match Sink::<pkt::HandleValueNotification>::poll_close(Pin::new(&mut guard.stream), cx) {
             Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
-            Poll::Ready(Err(err)) => {
-                return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err)))
-            }
+            Poll::Ready(Err(err)) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err))),
             Poll::Pending => Poll::Pending,
         }
     }
@@ -341,9 +353,7 @@ where
         };
         match Sink::<pkt::HandleValueIndication>::poll_close(Pin::new(&mut guard.stream), cx) {
             Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
-            Poll::Ready(Err(err)) => {
-                return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err)))
-            }
+            Poll::Ready(Err(err)) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err))),
             Poll::Pending => Poll::Pending,
         }
     }
@@ -408,8 +418,13 @@ where
     match request {
         pkt::DeviceRecv::ExchangeMtuRequest(item) => {
             let response = handler.handle_exchange_mtu_request(&item);
+            if let Ok(response) = &response {
+                let client_rx_mtu = *item.client_rx_mtu() as usize;
+                let server_rx_mtu = *response.server_rx_mtu() as usize;
+                inner.stream.set_txmtu(client_rx_mtu);
+                inner.stream.set_rxmtu(server_rx_mtu);
+            }
             respond::<_, pkt::ExchangeMtuRequest>(&mut inner.stream, response).await?;
-            // TODO grow mtu
         }
 
         pkt::DeviceRecv::FindInformationRequest(item) => {
