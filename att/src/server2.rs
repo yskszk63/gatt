@@ -6,9 +6,11 @@ use std::future::Future;
 
 use futures::{Stream, Sink, TryStreamExt, SinkExt, FutureExt, StreamExt};
 use futures::lock::{Mutex, MutexGuard};
+use futures::channel::oneshot;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::sock::{AttListener, AttStream};
+use crate::Handle;
 use crate::packet as pkt;
 use pkt::pack::{self, Unpack};
 pub use crate::{Handler, ErrorResponse};
@@ -61,7 +63,12 @@ impl<R> Stream for PacketStream<R> where R: AsyncRead + Unpin {
             Poll::Ready(()) => {}
             Poll::Pending => return Poll::Pending,
         }
-        Poll::Ready(Some(Ok(Unpack::unpack(&mut buf.filled())?)))
+        let mut filled = buf.filled();
+        if filled.is_empty() {
+            Poll::Ready(None)
+        } else {
+            Poll::Ready(Some(Ok(Unpack::unpack(&mut filled)?)))
+        }
     }
 }
 
@@ -77,6 +84,7 @@ impl<W, S> Sink<S> for PacketStream<W> where W: AsyncWrite + Unpin, S: pkt::Devi
             Poll::Ready(Ok(()))
         }
     }
+
     fn start_send(self: Pin<&mut Self>, item: S) -> Result<()> {
         let Self { txlen, txbuf, .. } = self.get_mut();
 
@@ -86,6 +94,7 @@ impl<W, S> Sink<S> for PacketStream<W> where W: AsyncWrite + Unpin, S: pkt::Devi
         *txlen = len - write.len();
         Ok(())
     }
+
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
         let Self { inner, txlen, txbuf, .. } = self.get_mut();
 
@@ -100,6 +109,7 @@ impl<W, S> Sink<S> for PacketStream<W> where W: AsyncWrite + Unpin, S: pkt::Devi
             Poll::Pending => Poll::Pending,
         }
     }
+
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
         let this = self.get_mut();
         match Sink::<S>::poll_flush(Pin::new(this), cx)? {
@@ -113,12 +123,174 @@ impl<W, S> Sink<S> for PacketStream<W> where W: AsyncWrite + Unpin, S: pkt::Devi
     }
 }
 
+struct Inner<IO> {
+    stream: PacketStream<IO>,
+    await_confirmation: Option<oneshot::Sender<()>>,
+    // used notification / indication handles
+}
+
+impl<IO> Inner<IO> {
+    fn new(io: IO) -> Self {
+        Self {
+            stream: PacketStream::new(io),
+            await_confirmation: Default::default(),
+        }
+    }
+}
+
+enum NotificationState {
+    Write,
+    NeedFlush(usize),
+}
+
+struct NotificationInner<IO> {
+    handle: Handle,
+    inner: Arc<Mutex<Inner<IO>>>,
+    state: NotificationState,
+}
+
+impl<IO> AsyncWrite for NotificationInner<IO> where IO: AsyncWrite + Unpin {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        let Self { handle, inner, state, .. } = self.get_mut();
+        let mut guard = match inner.lock().poll_unpin(cx) {
+            Poll::Ready(guard) => guard,
+            Poll::Pending => return Poll::Pending,
+        };
+
+        loop {
+            match &state {
+                NotificationState::Write => {
+                    match Sink::<pkt::HandleValueNotification>::poll_ready(Pin::new(&mut guard.stream), cx) {
+                        Poll::Ready(Ok(())) => {}
+                        Poll::Ready(Err(err)) => return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err))),
+                        Poll::Pending => return Poll::Pending,
+                    }
+                    let item = pkt::HandleValueNotification::new(handle.clone(), buf.into());
+                    match Pin::new(&mut guard.stream).start_send(item) {
+                        Ok(()) => *state = NotificationState::NeedFlush(buf.len()),
+                        Err(err) => return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err))),
+                    }
+                }
+
+                NotificationState::NeedFlush(len) => {
+                    match Sink::<pkt::HandleValueNotification>::poll_flush(Pin::new(&mut guard.stream), cx) {
+                        Poll::Ready(Ok(())) => {
+                            let len = *len;
+                            *state = NotificationState::Write;
+                            return Poll::Ready(Ok(len));
+                        }
+                        Poll::Ready(Err(err)) => return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err))),
+                        Poll::Pending => return Poll::Pending,
+                    }
+                }
+            }
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let Self { inner, .. } = self.get_mut();
+        let mut guard = match inner.lock().poll_unpin(cx) {
+            Poll::Ready(guard) => guard,
+            Poll::Pending => return Poll::Pending,
+        };
+        match Sink::<pkt::HandleValueNotification>::poll_close(Pin::new(&mut guard.stream), cx) {
+            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
+            Poll::Ready(Err(err)) => return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err))),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+enum IndicationState {
+    Write,
+    NeedFlush(usize),
+    AwaitConfirmation(usize, oneshot::Receiver<()>),
+}
+
+struct IndicationInner<IO> {
+    handle: Handle,
+    inner: Arc<Mutex<Inner<IO>>>,
+    state: IndicationState,
+}
+
+impl<IO> AsyncWrite for IndicationInner<IO> where IO: AsyncWrite + Unpin {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        let Self { state, handle, inner, .. } = self.get_mut();
+        let mut guard = match inner.lock().poll_unpin(cx) {
+            Poll::Ready(guard) => guard,
+            Poll::Pending => return Poll::Pending,
+        };
+
+        loop {
+            match state {
+                IndicationState::Write => {
+                    match Sink::<pkt::HandleValueIndication>::poll_ready(Pin::new(&mut guard.stream), cx) {
+                        Poll::Ready(Ok(())) => {}
+                        Poll::Ready(Err(err)) => return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err))),
+                        Poll::Pending => return Poll::Pending,
+                    }
+                    let item = pkt::HandleValueIndication::new(handle.clone(), buf.into());
+                    match Pin::new(&mut guard.stream).start_send(item) {
+                        Ok(()) => *state = IndicationState::NeedFlush(buf.len()),
+                        Err(err) => return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err))),
+                    }
+                }
+
+                IndicationState::NeedFlush(len) => {
+                    match Sink::<pkt::HandleValueIndication>::poll_flush(Pin::new(&mut guard.stream), cx) {
+                        Poll::Ready(Ok(())) => {
+                            let (tx, rx) = oneshot::channel();
+                            guard.await_confirmation = Some(tx); // TODO check existence
+                            *state = IndicationState::AwaitConfirmation(*len, rx);
+                        }
+                        Poll::Ready(Err(err)) => return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err))),
+                        Poll::Pending => return Poll::Pending,
+                    }
+                }
+
+                IndicationState::AwaitConfirmation(len, rx) => {
+                    match rx.poll_unpin(cx) {
+                        Poll::Ready(Ok(())) => {
+                            let len = *len;
+                            *state = IndicationState::Write;
+                            return Poll::Ready(Ok(len));
+                        }
+                        Poll::Ready(Err(err)) => return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err))),
+                        Poll::Pending => return Poll::Pending,
+                    }
+                }
+            }
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let Self { inner, .. } = self.get_mut();
+        let mut guard = match inner.lock().poll_unpin(cx) {
+            Poll::Ready(guard) => guard,
+            Poll::Pending => return Poll::Pending,
+        };
+        match Sink::<pkt::HandleValueIndication>::poll_close(Pin::new(&mut guard.stream), cx) {
+            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
+            Poll::Ready(Err(err)) => return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err))),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
 struct TryLockNext<'a, IO> {
-    inner: &'a Mutex<PacketStream<IO>>,
+    inner: &'a Mutex<Inner<IO>>,
 }
 
 impl<'a, IO> Future for TryLockNext<'a, IO> where IO: AsyncRead + Unpin {
-    type Output = (MutexGuard<'a, PacketStream<IO>>, Option<Result<pkt::DeviceRecv>>);
+    type Output = (MutexGuard<'a, Inner<IO>>, Option<Result<pkt::DeviceRecv>>);
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let Self { inner } = self.get_mut();
@@ -128,7 +300,7 @@ impl<'a, IO> Future for TryLockNext<'a, IO> where IO: AsyncRead + Unpin {
             Poll::Pending => return Poll::Pending,
         };
 
-        match (*guard).poll_next_unpin(cx) {
+        match guard.stream.poll_next_unpin(cx) {
             Poll::Ready(item) => Poll::Ready((guard, item)),
             Poll::Pending => Poll::Pending,
         }
@@ -150,52 +322,52 @@ async fn respond<IO, R>(stream: &mut PacketStream<IO>, r: std::result::Result<R:
     Ok(())
 }
 
-async fn handle<IO, H>(stream: &mut PacketStream<IO>, handler: &mut H, request: pkt::DeviceRecv) -> Result<()> where IO: AsyncWrite + Unpin, H: crate::Handler {
+async fn handle<IO, H>(inner: &mut Inner<IO>, handler: &mut H, request: pkt::DeviceRecv) -> Result<()> where IO: AsyncWrite + Unpin, H: crate::Handler {
     match request {
         pkt::DeviceRecv::ExchangeMtuRequest(item) => {
             let response = handler.handle_exchange_mtu_request(&item);
-            respond::<_, pkt::ExchangeMtuRequest>(stream, response).await?;
+            respond::<_, pkt::ExchangeMtuRequest>(&mut inner.stream, response).await?;
             // TODO grow mtu
         }
 
         pkt::DeviceRecv::FindInformationRequest(item) => {
             let response = handler.handle_find_information_request(&item);
-            respond::<_, pkt::FindInformationRequest>(stream, response).await?;
+            respond::<_, pkt::FindInformationRequest>(&mut inner.stream, response).await?;
         }
 
         pkt::DeviceRecv::FindByTypeValueRequest(item) => {
             let response = handler.handle_find_by_type_value_request(&item);
-            respond::<_, pkt::FindByTypeValueRequest>(stream, response).await?;
+            respond::<_, pkt::FindByTypeValueRequest>(&mut inner.stream, response).await?;
         }
 
         pkt::DeviceRecv::ReadByTypeRequest(item) => {
             let response = handler.handle_read_by_type_request(&item);
-            respond::<_, pkt::ReadByTypeRequest>(stream, response).await?;
+            respond::<_, pkt::ReadByTypeRequest>(&mut inner.stream, response).await?;
         }
 
         pkt::DeviceRecv::ReadRequest(item) => {
             let response = handler.handle_read_request(&item);
-            respond::<_, pkt::ReadRequest>(stream, response).await?;
+            respond::<_, pkt::ReadRequest>(&mut inner.stream, response).await?;
         }
 
         pkt::DeviceRecv::ReadBlobRequest(item) => {
             let response = handler.handle_read_blob_request(&item);
-            respond::<_, pkt::ReadBlobRequest>(stream, response).await?;
+            respond::<_, pkt::ReadBlobRequest>(&mut inner.stream, response).await?;
         }
 
         pkt::DeviceRecv::ReadMultipleRequest(item) => {
             let response = handler.handle_read_multiple_request(&item);
-            respond::<_, pkt::ReadMultipleRequest>(stream, response).await?;
+            respond::<_, pkt::ReadMultipleRequest>(&mut inner.stream, response).await?;
         }
 
         pkt::DeviceRecv::ReadByGroupTypeRequest(item) => {
             let response = handler.handle_read_by_group_type_request(&item);
-            respond::<_, pkt::ReadByGroupTypeRequest>(stream, response).await?;
+            respond::<_, pkt::ReadByGroupTypeRequest>(&mut inner.stream, response).await?;
         }
 
         pkt::DeviceRecv::WriteRequest(item) => {
             let response = handler.handle_write_request(&item);
-            respond::<_, pkt::WriteRequest>(stream, response).await?;
+            respond::<_, pkt::WriteRequest>(&mut inner.stream, response).await?;
         }
 
         pkt::DeviceRecv::WriteCommand(item) => {
@@ -204,31 +376,49 @@ async fn handle<IO, H>(stream: &mut PacketStream<IO>, handler: &mut H, request: 
 
         pkt::DeviceRecv::PrepareWriteRequest(item) => {
             let response = handler.handle_prepare_write_request(&item);
-            respond::<_, pkt::PrepareWriteRequest>(stream, response).await?;
+            respond::<_, pkt::PrepareWriteRequest>(&mut inner.stream, response).await?;
         }
 
         pkt::DeviceRecv::ExecuteWriteRequest(item) => {
             let response = handler.handle_execute_write_request(&item);
-            respond::<_, pkt::ExecuteWriteRequest>(stream, response).await?;
+            respond::<_, pkt::ExecuteWriteRequest>(&mut inner.stream, response).await?;
         }
 
         pkt::DeviceRecv::SignedWriteCommand(item) => {
             handler.handle_signed_write_command(&item);
         }
 
-        pkt::DeviceRecv::HandleValueConfirmation(_item) => {
-            todo!()
+        pkt::DeviceRecv::HandleValueConfirmation(..) => {
+            if let Some(channel) = inner.await_confirmation.take() {
+                channel.send(()).ok();
+            }
         }
     }
     Ok(())
 }
 
 struct ConnectionInner<IO> {
-    inner: Arc<Mutex<PacketStream<IO>>>,
+    inner: Arc<Mutex<Inner<IO>>>,
 }
 
 impl<IO> ConnectionInner<IO> where IO: AsyncRead + AsyncWrite + Unpin {
-    async fn run<H>(&self, mut handler: H) -> Result<()> where H: crate::Handler {
+    fn notification(&self, handle: Handle) -> NotificationInner<IO> {
+        NotificationInner {
+            handle,
+            inner: self.inner.clone(),
+            state: NotificationState::Write,
+        }
+    }
+
+    fn indication(&self, handle: Handle) -> IndicationInner<IO> {
+        IndicationInner {
+            handle,
+            inner: self.inner.clone(),
+            state: IndicationState::Write,
+        }
+    }
+
+    async fn run<H>(self, mut handler: H) -> Result<()> where H: crate::Handler {
         loop {
             let (mut guard, request) = TryLockNext { inner: &self.inner }.await;
             let request = if let Some(request) = request {
@@ -242,6 +432,42 @@ impl<IO> ConnectionInner<IO> where IO: AsyncRead + AsyncWrite + Unpin {
     }
 }
 
+pub struct Notification {
+    inner: NotificationInner<AttStream>,
+}
+
+impl AsyncWrite for Notification {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
+pub struct Indication {
+    inner: IndicationInner<AttStream>,
+}
+
+impl AsyncWrite for Indication {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
 struct ServerInner<L> {
     inner: L,
 }
@@ -250,7 +476,7 @@ impl<L, IO> ServerInner<L> where L: Stream<Item = io::Result<IO>> + Unpin, IO: A
     async fn accept(&mut self) -> io::Result<Option<ConnectionInner<IO>>> {
         if let Some(sock) = self.inner.try_next().await? {
             return Ok(Some(ConnectionInner {
-                inner: Arc::new(Mutex::new(PacketStream::new(sock))),
+                inner: Arc::new(Mutex::new(Inner::new(sock))),
             }));
         }
         Ok(None)
@@ -262,7 +488,19 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub async fn run<H>(&self, handler: H) -> Result<()> where H: crate::Handler {
+    pub fn notification(&self, handle: Handle) -> Notification {
+        Notification {
+            inner: self.inner.notification(handle)
+        }
+    }
+
+    pub fn indication(&self, handle: Handle) -> Indication {
+        Indication {
+            inner: self.inner.indication(handle)
+        }
+    }
+
+    pub async fn run<H>(self, handler: H) -> Result<()> where H: crate::Handler {
         self.inner.run(handler).await?;
         Ok(())
     }
@@ -310,6 +548,7 @@ mod tests {
     use tokio_test::io::Builder;
     use futures::{TryStreamExt, SinkExt};
     use std::convert::TryFrom;
+    use tokio::io::AsyncWriteExt;
 
     #[tokio::test]
     async fn test_stream() {
@@ -324,5 +563,45 @@ mod tests {
 
         let packet = pkt::ExchangeMtuResponse::new(0x0018);
         stream.send(packet).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_connection() {
+        struct H;
+        impl Handler for H { }
+
+        let stream = Builder::new()
+            .write(&[0x1B, 0x01, 0x00, 0x6F, 0x6B])
+            .read(&[0x02, 0x17, 0x00])
+            .write(&[0x03, 0x17, 0x00])
+            .build();
+        let connection = ConnectionInner {
+            inner: Arc::new(Mutex::new(Inner::new(stream))),
+        };
+
+        let mut notification = connection.notification(Handle::new(1));
+        notification.write_all(b"ok").await.unwrap();
+        connection.run(H).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_indication() {
+        struct H;
+        impl Handler for H { }
+
+        let stream = Builder::new()
+            .write(&[0x1D, 0x01, 0x00, 0x6F, 0x6B])
+            .read(&[0x1E, 0x17, 0x00])
+            .build();
+        let connection = ConnectionInner {
+            inner: Arc::new(Mutex::new(Inner::new(stream))),
+        };
+
+        let mut indication = connection.indication(Handle::new(1));
+        let task = tokio::spawn(connection.run(H));
+
+        indication.write_all(b"ok").await.unwrap();
+
+        task.await.unwrap().unwrap();
     }
 }
