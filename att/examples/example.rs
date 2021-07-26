@@ -182,7 +182,8 @@ async fn main() -> anyhow::Result<()> {
 
     let mut server = Server::new()?;
     //server.needs_bond_mitm()?;
-    let connection = server.accept().await?.unwrap();
+    let (connection, addr) = server.accept().await?.unwrap();
+    println!("accept {:?}", addr);
     let mut notification = connection.notification(0x0025.into());
     let mut indication = connection.indication(0x000E.into());
 

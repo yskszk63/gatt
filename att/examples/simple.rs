@@ -35,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
 
     let mut server = Server::new()?;
-    let connection = server.accept().await?.unwrap();
+    let (connection, _) = server.accept().await?.unwrap();
     connection.run(MyHandler).await?;
     Ok(())
 }

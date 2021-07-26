@@ -95,6 +95,15 @@ fn set_sockopt_bt_security(fd: RawFd, level: u8, key_size: u8) -> io::Result<()>
     }
 }
 
+pub(crate) fn try_from(addr: socket2::SockAddr) -> io::Result<crate::Address> {
+    if addr.family() == libc::AF_BLUETOOTH as libc::sa_family_t {
+        let addr = unsafe { &*(addr.as_ptr() as *const sockaddr_l2) };
+        Ok(addr.l2_bdaddr.b.into())
+    } else {
+        Err(io::Error::new(io::ErrorKind::Other, "unexpected address family."))
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct AttStream {
     inner: AsyncFd<Socket>,
@@ -184,7 +193,7 @@ impl AttListener {
 }
 
 impl Stream for AttListener {
-    type Item = io::Result<AttStream>;
+    type Item = io::Result<(AttStream, socket2::SockAddr)>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
@@ -194,12 +203,12 @@ impl Stream for AttListener {
             };
             let result = guard.try_io(|fd| fd.get_ref().accept());
             match result {
-                Ok(Ok((sock, _))) => {
+                Ok(Ok((sock, addr))) => {
                     sock.set_nonblocking(true)?;
                     let sock = AttStream {
                         inner: AsyncFd::new(sock)?,
                     };
-                    return Poll::Ready(Some(Ok(sock)));
+                    return Poll::Ready(Some(Ok((sock, addr))));
                 }
                 Ok(Err(err)) => return Poll::Ready(Some(Err(err))),
                 Err(..) => {}

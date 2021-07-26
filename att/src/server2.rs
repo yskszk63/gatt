@@ -592,14 +592,14 @@ struct ServerInner<L> {
 
 impl<L, IO> ServerInner<L>
 where
-    L: Stream<Item = io::Result<IO>> + Unpin,
+    L: Stream<Item = io::Result<(IO, socket2::SockAddr)>> + Unpin,
     IO: AsyncRead + AsyncWrite + Unpin,
 {
-    async fn accept(&mut self) -> io::Result<Option<ConnectionInner<IO>>> {
-        if let Some(sock) = self.inner.try_next().await? {
-            return Ok(Some(ConnectionInner {
+    async fn accept(&mut self) -> io::Result<Option<(ConnectionInner<IO>, socket2::SockAddr)>> {
+        if let Some((sock, addr)) = self.inner.try_next().await? {
+            return Ok(Some((ConnectionInner {
                 inner: Arc::new(Mutex::new(Inner::new(sock))),
-            }));
+            }, addr)));
         }
         Ok(None)
     }
@@ -658,10 +658,11 @@ impl Server {
             .set_sockopt_bt_security(crate::sock::BT_SECURITY_HIGH, 0)
     }
 
-    pub async fn accept(&mut self) -> io::Result<Option<Connection>> {
-        if let Some(connection) = self.inner.accept().await? {
+    pub async fn accept(&mut self) -> io::Result<Option<(Connection, crate::Address)>> {
+        if let Some((connection, addr)) = self.inner.accept().await? {
             log::debug!("Connection accepted.");
-            Ok(Some(Connection { inner: connection }))
+            let addr = crate::sock::try_from(addr)?;
+            Ok(Some((Connection { inner: connection }, addr)))
         } else {
             Ok(None)
         }
