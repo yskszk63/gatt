@@ -5,7 +5,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use futures::Stream;
+use futures::{ready, Stream};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -100,7 +100,10 @@ pub(crate) fn try_from(addr: socket2::SockAddr) -> io::Result<crate::Address> {
         let addr = unsafe { &*(addr.as_ptr() as *const sockaddr_l2) };
         Ok(addr.l2_bdaddr.b.into())
     } else {
-        Err(io::Error::new(io::ErrorKind::Other, "unexpected address family."))
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            "unexpected address family.",
+        ))
     }
 }
 
@@ -116,19 +119,13 @@ impl AsyncRead for AttStream {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         loop {
-            let mut guard = match self.inner.poll_read_ready(cx)? {
-                Poll::Ready(guard) => guard,
-                Poll::Pending => return Poll::Pending,
-            };
+            let mut guard = ready!(self.inner.poll_read_ready(cx))?;
             let result = guard.try_io(|fd| fd.get_ref().recv(unsafe { buf.unfilled_mut() }));
-            match result {
-                Ok(Ok(n)) => {
-                    unsafe { buf.assume_init(n) };
-                    buf.advance(n);
-                    return Poll::Ready(Ok(()));
-                }
-                Ok(Err(err)) => return Poll::Ready(Err(err)),
-                Err(..) => {}
+            if let Ok(n) = result {
+                let n = n?;
+                unsafe { buf.assume_init(n) };
+                buf.advance(n);
+                return Poll::Ready(Ok(()));
             }
         }
     }
@@ -141,32 +138,25 @@ impl AsyncWrite for AttStream {
         buf: &[u8],
     ) -> Poll<Result<usize, io::Error>> {
         loop {
-            let mut guard = match self.inner.poll_write_ready(cx)? {
-                Poll::Ready(guard) => guard,
-                Poll::Pending => return Poll::Pending,
-            };
+            let mut guard = ready!(self.inner.poll_write_ready(cx))?;
             let result = guard.try_io(|fd| fd.get_ref().send(buf));
-            match result {
-                Ok(Ok(n)) => return Poll::Ready(Ok(n)),
-                Ok(Err(err)) => return Poll::Ready(Err(err)),
-                Err(..) => {}
+            if let Ok(n) = result {
+                return Poll::Ready(Ok(n?));
             }
         }
     }
+
     fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         Poll::Ready(Ok(()))
     }
+
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         loop {
-            let mut guard = match self.inner.poll_write_ready(cx)? {
-                Poll::Ready(guard) => guard,
-                Poll::Pending => return Poll::Pending,
-            };
+            let mut guard = ready!(self.inner.poll_write_ready(cx))?;
             let result = guard.try_io(|fd| fd.get_ref().shutdown(Shutdown::Write));
-            match result {
-                Ok(Ok(n)) => return Poll::Ready(Ok(n)),
-                Ok(Err(err)) => return Poll::Ready(Err(err)),
-                Err(..) => {}
+            if let Ok(result) = result {
+                result?;
+                return Poll::Ready(Ok(()));
             }
         }
     }
@@ -197,21 +187,15 @@ impl Stream for AttListener {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
-            let mut guard = match self.inner.poll_read_ready(cx)? {
-                Poll::Ready(guard) => guard,
-                Poll::Pending => return Poll::Pending,
-            };
+            let mut guard = ready!(self.inner.poll_read_ready(cx))?;
             let result = guard.try_io(|fd| fd.get_ref().accept());
-            match result {
-                Ok(Ok((sock, addr))) => {
-                    sock.set_nonblocking(true)?;
-                    let sock = AttStream {
-                        inner: AsyncFd::new(sock)?,
-                    };
-                    return Poll::Ready(Some(Ok((sock, addr))));
-                }
-                Ok(Err(err)) => return Poll::Ready(Some(Err(err))),
-                Err(..) => {}
+            if let Ok(result) = result {
+                let (sock, addr) = result?;
+                sock.set_nonblocking(true)?;
+                let sock = AttStream {
+                    inner: AsyncFd::new(sock)?,
+                };
+                return Poll::Ready(Some(Ok((sock, addr))));
             }
         }
     }

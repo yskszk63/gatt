@@ -6,7 +6,7 @@ use std::task::{Context, Poll, Waker};
 
 use futures::channel::oneshot;
 use futures::lock::{Mutex, MutexGuard};
-use futures::{FutureExt, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
+use futures::{ready, FutureExt, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::packet as pkt;
@@ -76,10 +76,7 @@ where
         let Self { inner, rxbuf, .. } = self.get_mut();
 
         let mut buf = ReadBuf::new(rxbuf);
-        match Pin::new(inner).poll_read(cx, &mut buf)? {
-            Poll::Ready(()) => {}
-            Poll::Pending => return Poll::Pending,
-        }
+        ready!(Pin::new(inner).poll_read(cx, &mut buf))?;
         let mut filled = buf.filled();
         if filled.is_empty() {
             Poll::Ready(None)
@@ -128,34 +125,24 @@ where
         } = self.get_mut();
 
         while *txlen != 0 {
-            match Pin::new(&mut *inner).poll_write(cx, &txbuf[..*txlen])? {
-                Poll::Ready(n) => *txlen -= n,
-                Poll::Pending => return Poll::Pending,
-            }
+            *txlen -= ready!(Pin::new(&mut *inner).poll_write(cx, &txbuf[..*txlen]))?;
         }
-        match Pin::new(&mut *inner).poll_flush(cx)? {
-            Poll::Ready(()) => Poll::Ready(Ok(())),
-            Poll::Pending => Poll::Pending,
-        }
+        ready!(Pin::new(&mut *inner).poll_flush(cx))?;
+        Poll::Ready(Ok(()))
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
         let this = self.get_mut();
-        match Sink::<S>::poll_flush(Pin::new(this), cx)? {
-            Poll::Ready(()) => {}
-            Poll::Pending => return Poll::Pending,
-        }
-        match Pin::new(&mut this.inner).poll_shutdown(cx)? {
-            Poll::Ready(()) => Poll::Ready(Ok(())),
-            Poll::Pending => Poll::Pending,
-        }
+        ready!(Sink::<S>::poll_flush(Pin::new(this), cx))?;
+        ready!(Pin::new(&mut this.inner).poll_shutdown(cx))?;
+        Poll::Ready(Ok(()))
     }
 }
 
 struct Inner<IO> {
     stream: PacketStream<IO>,
     await_confirmation: Option<oneshot::Sender<()>>,
-    // used notification / indication handles
+    // TODO used notification / indication handles
 }
 
 impl<IO> Inner<IO> {
@@ -193,48 +180,38 @@ where
             state,
             ..
         } = self.get_mut();
-        let mut guard = match inner.lock().poll_unpin(cx) {
-            Poll::Ready(guard) => guard,
-            Poll::Pending => return Poll::Pending,
-        };
+        let mut guard = ready!(inner.lock().poll_unpin(cx));
 
         loop {
             match &state {
                 NotificationState::Write => {
-                    match Sink::<pkt::HandleValueNotificationBorrow>::poll_ready(
-                        Pin::new(&mut guard.stream),
-                        cx,
-                    ) {
-                        Poll::Ready(Ok(())) => {}
-                        Poll::Ready(Err(err)) => {
-                            return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err)))
-                        }
-                        Poll::Pending => return Poll::Pending,
+                    if let Err(err) =
+                        ready!(Sink::<pkt::HandleValueNotificationBorrow>::poll_ready(
+                            Pin::new(&mut guard.stream),
+                            cx
+                        ))
+                    {
+                        return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err)));
                     }
                     let item = pkt::HandleValueNotificationBorrow::new(handle.clone(), buf);
-                    match Pin::new(&mut guard.stream).start_send(item) {
-                        Ok(()) => *state = NotificationState::NeedFlush(buf.len()),
-                        Err(err) => {
-                            return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err)))
-                        }
+                    if let Err(err) = guard.stream.start_send_unpin(item) {
+                        return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err)));
                     }
+                    *state = NotificationState::NeedFlush(buf.len());
                 }
 
                 NotificationState::NeedFlush(len) => {
-                    match Sink::<pkt::HandleValueNotificationBorrow>::poll_flush(
-                        Pin::new(&mut guard.stream),
-                        cx,
-                    ) {
-                        Poll::Ready(Ok(())) => {
-                            let len = *len;
-                            *state = NotificationState::Write;
-                            return Poll::Ready(Ok(len));
-                        }
-                        Poll::Ready(Err(err)) => {
-                            return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err)))
-                        }
-                        Poll::Pending => return Poll::Pending,
+                    if let Err(err) =
+                        ready!(Sink::<pkt::HandleValueNotificationBorrow>::poll_flush(
+                            Pin::new(&mut guard.stream),
+                            cx
+                        ))
+                    {
+                        return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err)));
                     }
+                    let len = *len;
+                    *state = NotificationState::Write;
+                    return Poll::Ready(Ok(len));
                 }
             }
         }
@@ -246,18 +223,14 @@ where
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let Self { inner, .. } = self.get_mut();
-        let mut guard = match inner.lock().poll_unpin(cx) {
-            Poll::Ready(guard) => guard,
-            Poll::Pending => return Poll::Pending,
-        };
-        match Sink::<pkt::HandleValueNotificationBorrow>::poll_close(
+        let mut guard = ready!(inner.lock().poll_unpin(cx));
+        if let Err(err) = ready!(Sink::<pkt::HandleValueNotificationBorrow>::poll_close(
             Pin::new(&mut guard.stream),
             cx,
-        ) {
-            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
-            Poll::Ready(Err(err)) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err))),
-            Poll::Pending => Poll::Pending,
+        )) {
+            return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err)));
         }
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -288,61 +261,44 @@ where
             inner,
             ..
         } = self.get_mut();
-        let mut guard = match inner.lock().poll_unpin(cx) {
-            Poll::Ready(guard) => guard,
-            Poll::Pending => return Poll::Pending,
-        };
+        let mut guard = ready!(inner.lock().poll_unpin(cx));
 
         loop {
             match state {
                 IndicationState::Write => {
-                    match Sink::<pkt::HandleValueIndicationBorrow>::poll_ready(
+                    if let Err(err) = ready!(Sink::<pkt::HandleValueIndicationBorrow>::poll_ready(
                         Pin::new(&mut guard.stream),
-                        cx,
-                    ) {
-                        Poll::Ready(Ok(())) => {}
-                        Poll::Ready(Err(err)) => {
-                            return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err)))
-                        }
-                        Poll::Pending => return Poll::Pending,
+                        cx
+                    )) {
+                        return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err)));
                     }
                     let item = pkt::HandleValueIndicationBorrow::new(handle.clone(), buf);
-                    match Pin::new(&mut guard.stream).start_send(item) {
-                        Ok(()) => *state = IndicationState::NeedFlush(buf.len()),
-                        Err(err) => {
-                            return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err)))
-                        }
+                    if let Err(err) = guard.stream.start_send_unpin(item) {
+                        return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err)));
                     }
+                    *state = IndicationState::NeedFlush(buf.len());
                 }
 
                 IndicationState::NeedFlush(len) => {
-                    match Sink::<pkt::HandleValueIndicationBorrow>::poll_flush(
+                    if let Err(err) = ready!(Sink::<pkt::HandleValueIndicationBorrow>::poll_flush(
                         Pin::new(&mut guard.stream),
-                        cx,
-                    ) {
-                        Poll::Ready(Ok(())) => {
-                            let (tx, rx) = oneshot::channel();
-                            guard.await_confirmation = Some(tx); // TODO check existence
-                            *state = IndicationState::AwaitConfirmation(*len, rx);
-                        }
-                        Poll::Ready(Err(err)) => {
-                            return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err)))
-                        }
-                        Poll::Pending => return Poll::Pending,
+                        cx
+                    )) {
+                        return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err)));
                     }
+                    let (tx, rx) = oneshot::channel();
+                    guard.await_confirmation = Some(tx); // TODO check existence
+                    *state = IndicationState::AwaitConfirmation(*len, rx);
                 }
 
-                IndicationState::AwaitConfirmation(len, rx) => match rx.poll_unpin(cx) {
-                    Poll::Ready(Ok(())) => {
-                        let len = *len;
-                        *state = IndicationState::Write;
-                        return Poll::Ready(Ok(len));
+                IndicationState::AwaitConfirmation(len, rx) => {
+                    if let Err(err) = ready!(rx.poll_unpin(cx)) {
+                        return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err)));
                     }
-                    Poll::Ready(Err(err)) => {
-                        return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err)))
-                    }
-                    Poll::Pending => return Poll::Pending,
-                },
+                    let len = *len;
+                    *state = IndicationState::Write;
+                    return Poll::Ready(Ok(len));
+                }
             }
         }
     }
@@ -353,16 +309,14 @@ where
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let Self { inner, .. } = self.get_mut();
-        let mut guard = match inner.lock().poll_unpin(cx) {
-            Poll::Ready(guard) => guard,
-            Poll::Pending => return Poll::Pending,
-        };
-        match Sink::<pkt::HandleValueIndicationBorrow>::poll_close(Pin::new(&mut guard.stream), cx)
-        {
-            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
-            Poll::Ready(Err(err)) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err))),
-            Poll::Pending => Poll::Pending,
+        let mut guard = ready!(inner.lock().poll_unpin(cx));
+        if let Err(err) = ready!(Sink::<pkt::HandleValueIndicationBorrow>::poll_close(
+            Pin::new(&mut guard.stream),
+            cx
+        )) {
+            return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, err)));
         }
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -379,15 +333,9 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let Self { inner } = self.get_mut();
 
-        let mut guard = match inner.lock().poll_unpin(cx) {
-            Poll::Ready(guard) => guard,
-            Poll::Pending => return Poll::Pending,
-        };
-
-        match guard.stream.poll_next_unpin(cx) {
-            Poll::Ready(item) => Poll::Ready((guard, item)),
-            Poll::Pending => Poll::Pending,
-        }
+        let mut guard = ready!(inner.lock().poll_unpin(cx));
+        let item = ready!(guard.stream.poll_next_unpin(cx));
+        Poll::Ready((guard, item))
     }
 }
 
@@ -597,9 +545,12 @@ where
 {
     async fn accept(&mut self) -> io::Result<Option<(ConnectionInner<IO>, socket2::SockAddr)>> {
         if let Some((sock, addr)) = self.inner.try_next().await? {
-            return Ok(Some((ConnectionInner {
-                inner: Arc::new(Mutex::new(Inner::new(sock))),
-            }, addr)));
+            return Ok(Some((
+                ConnectionInner {
+                    inner: Arc::new(Mutex::new(Inner::new(sock))),
+                },
+                addr,
+            )));
         }
         Ok(None)
     }
