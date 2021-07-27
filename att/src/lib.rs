@@ -81,7 +81,6 @@ mod macros;
 mod handle;
 mod handler;
 pub mod packet;
-#[path = "server2.rs"]
 pub mod server;
 mod size;
 mod sock;
