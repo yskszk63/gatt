@@ -2,6 +2,7 @@
 use std::convert::TryFrom;
 use std::fmt;
 use std::io;
+use std::num::{NonZeroU8, NonZeroUsize};
 
 use derive_new::new as New;
 use getset::Getters;
@@ -185,175 +186,111 @@ impl Unpack for SetOfHandles {
     }
 }
 
+trait AttributeData: Pack + Unpack {
+    fn format(&self) -> NonZeroU8;
+    fn len(val: NonZeroU8) -> PackResult<NonZeroUsize> {
+        Ok(val.into())
+    }
+}
+
+impl AttributeData for (Handle, Uuid) {
+    fn format(&self) -> NonZeroU8 {
+        match &self.1 {
+            Uuid::Uuid16(_) => NonZeroU8::new(0x01).unwrap(),
+            Uuid::Uuid128(_) => NonZeroU8::new(0x02).unwrap(),
+        }
+    }
+    fn len(val: NonZeroU8) -> PackResult<NonZeroUsize> {
+        Ok(match val.get() {
+            0x01 => NonZeroUsize::new(2 + 2).unwrap(),
+            0x02 => NonZeroUsize::new(2 + 16).unwrap(),
+            unknown => return Err(PackError::Unexpected(format!("format {}", unknown))),
+        })
+    }
+}
+
+impl AttributeData for (Handle, Box<[u8]>) {
+    fn format(&self) -> NonZeroU8 {
+        NonZeroU8::new(2 + self.1.len() as u8).unwrap()
+    }
+}
+
+impl AttributeData for (Handle, Handle, Box<[u8]>) {
+    fn format(&self) -> NonZeroU8 {
+        NonZeroU8::new(2 + 2 + self.2.len() as u8).unwrap()
+    }
+}
+
 #[derive(Debug)]
 struct AttributeDataList<T>(Vec<T>);
 
-impl Pack for AttributeDataList<(Handle, Uuid)> {
+impl<A> Pack for AttributeDataList<A>
+where
+    A: AttributeData,
+{
     fn pack<W>(self, write: &mut W) -> PackResult<()>
     where
         W: io::Write,
     {
-        let mut iter = self.0.into_iter();
-        let head = if let Some(head) = iter.next() {
-            head
-        } else {
+        if self.0.is_empty() {
             return 0u8.pack(write);
-        };
-        let format = match &head.1 {
-            Uuid::Uuid16(_) => 0x01u8,
-            Uuid::Uuid128(_) => 0x02u8,
-        };
+        }
 
-        let pack_data = |(handle, uuid): (Handle, Uuid), write: &mut W| -> PackResult<()> {
-            handle.pack(write)?;
-            match &uuid {
-                Uuid::Uuid16(_) if format != 0x01 => panic!(),
-                Uuid::Uuid128(_) if format != 0x02 => panic!(),
-                _ => {}
-            };
-            uuid.pack(write)?;
-            Ok(())
-        };
+        let format = self.0[0].format();
+        let len = A::len(format)?.get();
+        let mut buf = vec![0; len];
 
-        (format).pack(write)?;
-        pack_data(head, write)?;
-        for data in iter {
-            pack_data(data, write)?;
+        format.get().pack(write)?;
+
+        for data in self.0 {
+            let mut w = &mut buf[..];
+            data.pack(&mut w)?;
+            if !w.is_empty() {
+                return Err(PackError::Unexpected(format!("length")));
+            }
+            write.write_all(&buf)?;
         }
         Ok(())
     }
 }
 
-impl Unpack for AttributeDataList<(Handle, Uuid)> {
+impl<A> Unpack for AttributeDataList<A>
+where
+    A: AttributeData,
+{
     fn unpack<R>(read: &mut R) -> PackResult<Self>
     where
         R: io::Read,
     {
         let format = u8::unpack(read)?;
-
-        let mut v = vec![];
-        loop {
-            let handle = match Handle::unpack(read) {
-                Ok(handle) => handle,
-                Err(PackError::NoDataAvailable) => break,
-                Err(err) => return Err(err),
-            };
-            let uuid = if format == 0x01 {
-                Uuid::Uuid16(Unpack::unpack(read)?)
-            } else {
-                Uuid::Uuid128(Unpack::unpack(read)?)
-            };
-            v.push((handle, uuid))
-        }
-        Ok(Self(v))
-    }
-}
-
-impl Pack for AttributeDataList<(Handle, Box<[u8]>)> {
-    fn pack<W>(self, write: &mut W) -> PackResult<()>
-    where
-        W: io::Write,
-    {
-        let mut iter = self.0.into_iter();
-        let head = if let Some(head) = iter.next() {
-            head
+        let format = if let Some(format) = NonZeroU8::new(format) {
+            format
         } else {
-            return 0u8.pack(write);
-        };
-        let len = head.1.len();
-
-        let pack_data = |(handle, data): (Handle, Box<[u8]>), write: &mut W| -> PackResult<()> {
-            if data.len() != len {
-                panic!()
-            }
-            handle.pack(write)?;
-            data.pack(write)?;
-            Ok(())
+            return Ok(Self(vec![]));
         };
 
-        ((len + 2) as u8).pack(write)?;
-        pack_data(head, write)?;
-        for data in iter {
-            pack_data(data, write)?;
-        }
-        Ok(())
-    }
-}
+        let len = A::len(format)?.get();
+        let mut buf = vec![0; len];
+        let mut items = vec![];
 
-impl Unpack for AttributeDataList<(Handle, Box<[u8]>)> {
-    fn unpack<R>(read: &mut R) -> PackResult<Self>
-    where
-        R: io::Read,
-    {
-        let len = u8::unpack(read)? as usize;
-        let mut v = vec![];
         loop {
-            let handle = match Handle::unpack(read) {
-                Ok(handle) => handle,
-                Err(PackError::NoDataAvailable) => break,
-                Err(err) => return Err(err),
-            };
-            let mut data = vec![0; len - 2];
-            read.read_exact(&mut data)?;
-            v.push((handle, data.into()));
-        }
-        Ok(Self(v))
-    }
-}
-
-impl Pack for AttributeDataList<(Handle, Handle, Box<[u8]>)> {
-    fn pack<W>(self, write: &mut W) -> PackResult<()>
-    where
-        W: io::Write,
-    {
-        let mut iter = self.0.into_iter();
-        let head = if let Some(head) = iter.next() {
-            head
-        } else {
-            return 0u8.pack(write);
-        };
-        let len = head.2.len();
-
-        let pack_data = |(handle1, handle2, data): (Handle, Handle, Box<[u8]>),
-                         write: &mut W|
-         -> PackResult<()> {
-            if data.len() != len {
-                panic!()
+            let mut rest = buf.len();
+            while rest > 0 {
+                let n = read.read(&mut buf)?;
+                if n > 0 {
+                    rest -= n;
+                } else {
+                    break;
+                }
             }
-            handle1.pack(write)?;
-            handle2.pack(write)?;
-            data.pack(write)?;
-            Ok(())
-        };
 
-        ((len + 4) as u8).pack(write)?;
-        pack_data(head, write)?;
-        for data in iter {
-            pack_data(data, write)?;
-        }
-        Ok(())
-    }
-}
+            if rest == buf.len() {
+                return Ok(Self(items));
+            }
 
-impl Unpack for AttributeDataList<(Handle, Handle, Box<[u8]>)> {
-    fn unpack<R>(read: &mut R) -> PackResult<Self>
-    where
-        R: io::Read,
-    {
-        let len = u8::unpack(read)? as usize;
-        let mut v = vec![];
-        loop {
-            let handle1 = match Handle::unpack(read) {
-                Ok(handle) => handle,
-                Err(PackError::NoDataAvailable) => break,
-                Err(err) => return Err(err),
-            };
-            let handle2 = Handle::unpack(read)?;
-            let mut data = vec![0; len - 4];
-            read.read_exact(&mut data)?;
-            v.push((handle1, handle2, data.into()));
+            let item = A::unpack(&mut &buf[..])?;
+            items.push(item);
         }
-        Ok(Self(v))
     }
 }
 

@@ -618,7 +618,13 @@ impl Server {
         if let Some((connection, addr)) = self.inner.accept().await? {
             log::debug!("Connection accepted.");
             let addr = crate::sock::try_from(addr)?;
-            Ok(Some((Connection { inner: connection, addr: addr.clone(), }, addr)))
+            Ok(Some((
+                Connection {
+                    inner: connection,
+                    addr: addr.clone(),
+                },
+                addr,
+            )))
         } else {
             Ok(None)
         }
