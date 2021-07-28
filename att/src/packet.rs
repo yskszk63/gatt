@@ -872,14 +872,3 @@ impl<'a> DeviceSend for HandleValueIndicationBorrow<'a> {}
 impl<'a> Indication for HandleValueNotificationBorrow<'a> {
     type Confirmation = HandleValueConfirmation;
 }
-
-#[cfg(test)]
-mod tests {
-    //use super::*;
-
-    #[test]
-    fn test_object_safety() {
-        // #[allow(dead_code)]
-        // /fn foo(_: &dyn Request<Response = dyn Response>) {}
-    }
-}
