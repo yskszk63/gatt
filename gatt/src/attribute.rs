@@ -1,7 +1,34 @@
-use bytes::Buf;
+//use bytes::Buf;
 
 use att::uuid::Uuid16;
 use att::{Handle, Uuid};
+
+trait BufRead {
+    fn read<const N: usize>(&mut self) -> [u8; N];
+
+    fn get_u8(&mut self) -> u8 {
+        u8::from_le_bytes(self.read())
+    }
+
+    fn get_u16_le(&mut self) -> u16 {
+        u16::from_le_bytes(self.read())
+    }
+
+    fn get_u128_le(&mut self) -> u128 {
+        u128::from_le_bytes(self.read())
+    }
+}
+
+impl BufRead for &[u8] {
+    fn read<const N: usize>(&mut self) -> [u8; N] {
+        let (l, r) = self.split_at(N);
+        *self = r;
+
+        let mut a = [0; N];
+        a.copy_from_slice(&l);
+        a
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
@@ -492,7 +519,7 @@ impl Attribute {
         }
 
         match self {
-            Self::Service { uuid, .. } => match val.remaining() {
+            Self::Service { uuid, .. } => match val.len() {
                 2 => *uuid = Uuid::new_uuid16(val.get_u16_le()),
                 16 => *uuid = Uuid::new_uuid128(val.get_u128_le()),
                 _ => return Err(Error::InvalidDataLength),
@@ -504,13 +531,13 @@ impl Attribute {
                 uuid,
                 ..
             } => {
-                match val.remaining() {
+                match val.len() {
                     6 | 20 => {}
                     _ => return Err(Error::InvalidDataLength),
                 }
                 *included_service_handle = val.get_u16_le().into();
                 *end_group_handle = val.get_u16_le().into();
-                match val.remaining() {
+                match val.len() {
                     2 => *uuid = Uuid::new_uuid16(val.get_u16_le()),
                     16 => *uuid = Uuid::new_uuid128(val.get_u128_le()),
                     _ => unreachable!(),
@@ -523,13 +550,13 @@ impl Attribute {
                 uuid,
                 ..
             } => {
-                match val.remaining() {
+                match val.len() {
                     5 | 19 => {}
                     _ => return Err(Error::InvalidDataLength),
                 }
                 *properties = CharacteristicProperties::from_bits_truncate(val.get_u8());
                 *value_handle = val.get_u16_le().into();
-                match val.remaining() {
+                match val.len() {
                     2 => *uuid = Uuid::new_uuid16(val.get_u16_le()),
                     16 => *uuid = Uuid::new_uuid128(val.get_u128_le()),
                     _ => return Err(Error::InvalidDataLength),
@@ -544,7 +571,7 @@ impl Attribute {
                 extended_properties,
                 ..
             } => {
-                if !val.has_remaining() {
+                if val.is_empty() {
                     return Err(Error::InvalidDataLength);
                 }
                 *extended_properties =
@@ -552,16 +579,14 @@ impl Attribute {
             }
 
             Self::CharacteristicUserDescription { description, .. } => {
-                let mut b = vec![0; val.remaining()];
-                val.copy_to_slice(&mut b);
-                *description = match String::from_utf8(b) {
+                *description = match String::from_utf8(val.to_vec()) {
                     Ok(v) => v,
                     Err(_) => return Err(Error::InvalidDataLength),
                 }
             }
 
             Self::ClientCharacteristicConfiguration { configuration, .. } => {
-                if val.remaining() < 2 {
+                if val.len() < 2 {
                     return Err(Error::InvalidDataLength);
                 }
                 *configuration =
@@ -569,7 +594,7 @@ impl Attribute {
             }
 
             Self::ServerCharacteristicConfiguration { configuration, .. } => {
-                if val.remaining() < 2 {
+                if val.len() < 2 {
                     return Err(Error::InvalidDataLength);
                 }
                 *configuration =
@@ -584,7 +609,7 @@ impl Attribute {
                 description,
                 ..
             } => {
-                if val.remaining() != 8 {
+                if val.len() != 8 {
                     return Err(Error::InvalidDataLength);
                 }
                 *format = val.get_u8();
@@ -598,10 +623,10 @@ impl Attribute {
                 attribute_handles, ..
             } => {
                 let mut v = vec![];
-                while val.remaining() > 2 {
+                while val.len() > 2 {
                     v.push(val.get_u16_le().into());
                 }
-                if val.has_remaining() {
+                if !val.is_empty() {
                     return Err(Error::InvalidDataLength);
                 }
                 *attribute_handles = v;
