@@ -246,7 +246,7 @@ where
             let mut w = &mut buf[..];
             data.pack(&mut w)?;
             if !w.is_empty() {
-                return Err(PackError::Unexpected(format!("length")));
+                return Err(PackError::Unexpected("length".into()));
             }
             write.write_all(&buf)?;
         }

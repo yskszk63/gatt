@@ -8,6 +8,8 @@ use att::{Handle, Uuid};
 
 use crate::attribute::{Attribute, Error as AttrError};
 
+type Result<T> = std::result::Result<T, (Handle, ErrorCode)>;
+
 #[derive(Debug)]
 pub(crate) struct Database {
     attrs: BTreeMap<Handle, Attribute>,
@@ -21,7 +23,7 @@ impl Database {
         uuid: &Uuid,
         authorized: bool,
         authenticated: bool,
-    ) -> Result<Vec<(Handle, Handle, Box<[u8]>)>, (Handle, ErrorCode)> {
+    ) -> Result<Vec<(Handle, Handle, Box<[u8]>)>> {
         let start = range.start().clone();
 
         if range.start() == &Handle::from(0x0000) || range.start() > range.end() {
@@ -79,7 +81,7 @@ impl Database {
         value: &[u8],
         authorized: bool,
         authenticated: bool,
-    ) -> Result<Vec<(Handle, Handle)>, (Handle, ErrorCode)> {
+    ) -> Result<Vec<(Handle, Handle)>> {
         let start = range.start().clone();
 
         let result = self
@@ -105,7 +107,7 @@ impl Database {
         uuid: &Uuid,
         authorized: bool,
         authenticated: bool,
-    ) -> Result<Vec<(Handle, Box<[u8]>)>, (Handle, ErrorCode)> {
+    ) -> Result<Vec<(Handle, Box<[u8]>)>> {
         let start = range.start().clone();
 
         if range.start() == &Handle::from(0x0000) || range.start() > range.end() {
@@ -134,7 +136,7 @@ impl Database {
                     None
                 }
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         if result.is_empty() {
             Err((start, ErrorCode::AttributeNotFound))
@@ -146,7 +148,7 @@ impl Database {
     pub(crate) fn find_information(
         &self,
         range: RangeInclusive<Handle>,
-    ) -> Result<Vec<(Handle, Uuid)>, (Handle, ErrorCode)> {
+    ) -> Result<Vec<(Handle, Uuid)>> {
         let start = range.start().clone();
 
         if range.start() == &Handle::from(0x0000) || range.start() > range.end() {
@@ -181,7 +183,7 @@ impl Database {
         handle: &Handle,
         authorized: bool,
         authenticated: bool,
-    ) -> Result<Box<[u8]>, (Handle, ErrorCode)> {
+    ) -> Result<Box<[u8]>> {
         if handle == &0x0000.into() {
             return Err((handle.clone(), ErrorCode::InvalidHandle));
         }
@@ -208,16 +210,16 @@ impl Database {
     pub(crate) fn write(
         &mut self,
         handle: &Handle,
-        mut val: &[u8],
+        val: &[u8],
         authorized: bool,
         authenticated: bool,
-    ) -> Result<(), (Handle, ErrorCode)> {
+    ) -> Result<()> {
         if handle == &0x0000.into() {
             return Err((handle.clone(), ErrorCode::InvalidHandle));
         }
 
         if let Some(v) = self.attrs.get_mut(handle) {
-            match v.set(&mut val, authorized, authenticated) {
+            match v.set(val, authorized, authenticated) {
                 Ok(_) => Ok(()),
                 Err(AttrError::PermissionDenied) => {
                     Err((handle.clone(), ErrorCode::WriteNotPermitted))

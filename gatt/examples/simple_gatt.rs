@@ -76,7 +76,10 @@ async fn main() -> anyhow::Result<()> {
     let mut n = 0;
     loop {
         tokio::select! {
-            r = Pin::new(&mut task) => r?,
+            r = Pin::new(&mut task) => {
+                r?;
+                return Ok(());
+            }
 
             maybe_line = spawn_blocking(|| stdin().read_line(&mut String::new())) => {
                 maybe_line??;
