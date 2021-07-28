@@ -1,4 +1,4 @@
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::Buf;
 
 use att::uuid::Uuid16;
 use att::{Handle, Uuid};
@@ -106,7 +106,7 @@ pub(crate) enum Attribute {
     CharacteristicValue {
         handle: Handle,
         attr_type: Uuid,
-        value: Bytes,
+        value: Box<[u8]>,
         permission: Permission,
     },
 
@@ -153,7 +153,7 @@ pub(crate) enum Attribute {
     Descriptor {
         handle: Handle,
         uuid: Uuid,
-        value: Bytes,
+        value: Box<[u8]>,
         permission: Permission,
     },
 }
@@ -208,7 +208,7 @@ impl Attribute {
     pub(crate) fn new_characteristic_value(
         handle: Handle,
         attr_type: Uuid,
-        value: Bytes,
+        value: Box<[u8]>,
         permission: Permission,
     ) -> Self {
         Self::CharacteristicValue {
@@ -286,7 +286,7 @@ impl Attribute {
     pub(crate) fn new_descriptor(
         handle: Handle,
         uuid: Uuid,
-        value: Bytes,
+        value: Box<[u8]>,
         permission: Permission,
     ) -> Self {
         Self::Descriptor {
@@ -348,7 +348,7 @@ impl Attribute {
         }
     }
 
-    pub(crate) fn get(&self, authorized: bool, authenticated: bool) -> Result<Bytes, Error> {
+    pub(crate) fn get(&self, authorized: bool, authenticated: bool) -> Result<Box<[u8]>, Error> {
         if !self.permission().contains(Permission::READABLE) {
             return Err(Error::PermissionDenied);
         }
@@ -381,14 +381,14 @@ impl Attribute {
                 uuid,
                 ..
             } => {
-                let mut result = BytesMut::new();
+                let mut result = vec![];
                 result.extend_from_slice(&included_service_handle.as_u16().to_le_bytes());
                 result.extend_from_slice(&end_group_handle.as_u16().to_le_bytes());
                 match uuid {
                     Uuid::Uuid16(uuid) => result.extend_from_slice(&uuid.as_u16().to_le_bytes()),
                     Uuid::Uuid128(uuid) => result.extend_from_slice(&uuid.as_u128().to_le_bytes()),
                 }
-                result.freeze()
+                result.into()
             }
 
             Self::Characteristic {
@@ -397,14 +397,14 @@ impl Attribute {
                 uuid,
                 ..
             } => {
-                let mut result = BytesMut::new();
+                let mut result = vec![];
                 result.extend_from_slice(&properties.bits().to_le_bytes());
                 result.extend_from_slice(&value_handle.as_u16().to_le_bytes());
                 match uuid {
                     Uuid::Uuid16(uuid) => result.extend_from_slice(&uuid.as_u16().to_le_bytes()),
                     Uuid::Uuid128(uuid) => result.extend_from_slice(&uuid.as_u128().to_le_bytes()),
                 }
-                result.freeze()
+                result.into()
             }
 
             Self::CharacteristicValue { value, .. } => value.clone(),
@@ -413,23 +413,25 @@ impl Attribute {
                 extended_properties,
                 ..
             } => {
-                let mut result = BytesMut::new();
+                let mut result = vec![];
                 result.extend_from_slice(&extended_properties.bits().to_le_bytes());
-                result.freeze()
+                result.into()
             }
 
-            Self::CharacteristicUserDescription { description, .. } => description.clone().into(),
+            Self::CharacteristicUserDescription { description, .. } => {
+                description.as_bytes().into()
+            }
 
             Self::ClientCharacteristicConfiguration { configuration, .. } => {
-                let mut result = BytesMut::new();
+                let mut result = vec![];
                 result.extend_from_slice(&configuration.bits().to_le_bytes());
-                result.freeze()
+                result.into()
             }
 
             Self::ServerCharacteristicConfiguration { configuration, .. } => {
-                let mut result = BytesMut::new();
+                let mut result = vec![];
                 result.extend_from_slice(&configuration.bits().to_le_bytes());
-                result.freeze()
+                result.into()
             }
 
             Self::CharacteristicPresentationFormat {
@@ -440,38 +442,35 @@ impl Attribute {
                 description,
                 ..
             } => {
-                let mut result = BytesMut::new();
+                let mut result = vec![];
                 result.extend_from_slice(&format.to_le_bytes());
                 result.extend_from_slice(&exponent.to_le_bytes());
                 result.extend_from_slice(&unit.to_le_bytes());
                 result.extend_from_slice(&name_space.to_le_bytes());
                 result.extend_from_slice(&description.to_le_bytes());
-                result.freeze()
+                result.into()
             }
 
             Self::CharacteristicAggregateFormat {
                 attribute_handles, ..
             } => {
-                let mut result = BytesMut::new();
+                let mut result = vec![];
                 for handle in attribute_handles {
                     result.extend_from_slice(&handle.as_u16().to_le_bytes());
                 }
-                result.freeze()
+                result.into()
             }
 
             Self::Descriptor { value, .. } => value.clone(),
         })
     }
 
-    pub(crate) fn set<B>(
+    pub(crate) fn set(
         &mut self,
-        val: &mut B,
+        mut val: &[u8],
         authorized: bool,
         authenticated: bool,
-    ) -> Result<(), Error>
-    where
-        B: Buf,
-    {
+    ) -> Result<(), Error> {
         if !self.permission().contains(Permission::WRITEABLE) {
             return Err(Error::PermissionDenied);
         }
@@ -538,7 +537,7 @@ impl Attribute {
             }
 
             Self::CharacteristicValue { value, .. } => {
-                *value = val.copy_to_bytes(val.remaining());
+                *value = val.into();
             }
 
             Self::CharacteristicExtendedProperties {
@@ -608,7 +607,7 @@ impl Attribute {
                 *attribute_handles = v;
             }
 
-            Self::Descriptor { value, .. } => *value = val.copy_to_bytes(val.remaining()),
+            Self::Descriptor { value, .. } => *value = val.into(),
         };
         Ok(())
     }

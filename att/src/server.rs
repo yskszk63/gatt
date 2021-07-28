@@ -562,7 +562,7 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn addr(&self) -> &crate::Address {
+    pub fn address(&self) -> &crate::Address {
         &self.addr
     }
 

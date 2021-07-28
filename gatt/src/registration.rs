@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 use att::{Handle, Uuid};
-use bytes::Bytes;
 
 use crate::attribute::{
     Attribute, CharacteristicExtendedProperties as AttExProperties,
@@ -109,9 +108,9 @@ where
         properties: CharacteristicProperties,
     ) where
         U: Into<Uuid>,
-        B: Into<Bytes>,
+        B: AsRef<[u8]>,
     {
-        self.add_characteristic_internal(None, uuid, val, properties)
+        self.add_characteristic_internal(None, uuid, val.as_ref(), properties)
     }
 
     pub fn add_characteristic_with_token<U, B>(
@@ -122,21 +121,20 @@ where
         properties: CharacteristicProperties,
     ) where
         U: Into<Uuid>,
-        B: Into<Bytes>,
         T: Hash + Eq + Clone,
+        B: AsRef<[u8]>,
     {
-        self.add_characteristic_internal(Some(token), uuid, val, properties)
+        self.add_characteristic_internal(Some(token), uuid, val.as_ref(), properties)
     }
 
-    fn add_characteristic_internal<U, B>(
+    fn add_characteristic_internal<U>(
         &mut self,
         token: Option<T>,
         uuid: U,
-        val: B,
+        val: &[u8],
         properties: CharacteristicProperties,
     ) where
         U: Into<Uuid>,
-        B: Into<Bytes>,
     {
         let uuid = uuid.into();
         let val = val.into();
@@ -199,10 +197,9 @@ where
         }
     }
 
-    pub fn add_descriptor<U, B>(&mut self, uuid: U, val: B, writable: bool)
+    pub fn add_descriptor<U>(&mut self, uuid: U, val: &[u8], writable: bool)
     where
         U: Into<Uuid>,
-        B: Into<Bytes>,
     {
         let uuid = uuid.into();
         let handle = self.next_handle();

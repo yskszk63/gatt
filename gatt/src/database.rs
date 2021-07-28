@@ -5,7 +5,6 @@ use std::ops::RangeInclusive;
 use att::packet::ErrorCode;
 use att::uuid::Uuid16;
 use att::{Handle, Uuid};
-use bytes::Bytes;
 
 use crate::attribute::{Attribute, Error as AttrError};
 
@@ -22,7 +21,7 @@ impl Database {
         uuid: &Uuid,
         authorized: bool,
         authenticated: bool,
-    ) -> Result<Vec<(Handle, Handle, Bytes)>, (Handle, ErrorCode)> {
+    ) -> Result<Vec<(Handle, Handle, Box<[u8]>)>, (Handle, ErrorCode)> {
         let start = range.start().clone();
 
         if range.start() == &Handle::from(0x0000) || range.start() > range.end() {
@@ -30,7 +29,7 @@ impl Database {
         }
 
         let mut result = vec![];
-        let mut current = None as Option<(&Handle, Bytes)>;
+        let mut current = None as Option<(&Handle, Box<[u8]>)>;
         let mut last = &Handle::from(0x0000);
         let mut val_len = None;
 
@@ -77,7 +76,7 @@ impl Database {
         &self,
         range: RangeInclusive<Handle>,
         uuid: &Uuid16,
-        value: &Bytes,
+        value: &[u8],
         authorized: bool,
         authenticated: bool,
     ) -> Result<Vec<(Handle, Handle)>, (Handle, ErrorCode)> {
@@ -87,7 +86,7 @@ impl Database {
             .read_by_group_type(range, &uuid.clone().into(), authorized, authenticated)?
             .into_iter()
             .filter_map(|(handle, end, v)| {
-                if v == value {
+                if &*v == value {
                     Some((handle, end))
                 } else {
                     None
@@ -106,7 +105,7 @@ impl Database {
         uuid: &Uuid,
         authorized: bool,
         authenticated: bool,
-    ) -> Result<Vec<(Handle, Bytes)>, (Handle, ErrorCode)> {
+    ) -> Result<Vec<(Handle, Box<[u8]>)>, (Handle, ErrorCode)> {
         let start = range.start().clone();
 
         if range.start() == &Handle::from(0x0000) || range.start() > range.end() {
@@ -182,7 +181,7 @@ impl Database {
         handle: &Handle,
         authorized: bool,
         authenticated: bool,
-    ) -> Result<Bytes, (Handle, ErrorCode)> {
+    ) -> Result<Box<[u8]>, (Handle, ErrorCode)> {
         if handle == &0x0000.into() {
             return Err((handle.clone(), ErrorCode::InvalidHandle));
         }
@@ -253,7 +252,6 @@ mod tests {
     use crate::attribute::{
         CharacteristicProperties, ClientCharacteristicConfiguration, Permission,
     };
-    use bytes::Bytes;
 
     #[test]
     fn test_read_by_group_type() {
@@ -349,7 +347,7 @@ mod tests {
             .find_by_type_value(
                 0x0001.into()..=0xFFFF.into(),
                 &Uuid16::new(0x2800),
-                &vec![0x01, 0x18].into(),
+                &vec![0x01, 0x18],
                 false,
                 false,
             )
@@ -359,7 +357,7 @@ mod tests {
             .find_by_type_value(
                 0x0010.into()..=0xFFFF.into(),
                 &Uuid16::new(0x2800),
-                &vec![0x01, 0x18].into(),
+                &vec![0x01, 0x18],
                 false,
                 false,
             )
@@ -465,7 +463,7 @@ mod tests {
         let db = example_db();
 
         let result = db.read(&0x0005.into(), false, false).unwrap();
-        assert_eq!(&result, &b"abc"[..]);
+        assert_eq!(&*result, &b"abc"[..]);
 
         let result = db.read(&0x0000.into(), false, false).unwrap_err();
         assert_eq!(result, (0x0000.into(), ErrorCode::InvalidHandle));
@@ -495,7 +493,7 @@ mod tests {
             Attribute::new_characteristic_value(
                 0x0003.into(),
                 Uuid::new_uuid16(0x2A00),
-                Bytes::from(""),
+                [].into(),
                 Permission::WRITEABLE,
             ),
             Attribute::new_characteristic(
@@ -507,7 +505,7 @@ mod tests {
             Attribute::new_characteristic_value(
                 0x0005.into(),
                 Uuid::new_uuid16(0x2A01),
-                Bytes::from("abc"),
+                b"abc".as_ref().into(),
                 Permission::READABLE,
             ),
             Attribute::new_primary_service(0x000C.into(), Uuid::new_uuid16(0x1801)),
@@ -520,7 +518,7 @@ mod tests {
             Attribute::new_characteristic_value(
                 0x000E.into(),
                 Uuid::new_uuid16(0x2A05),
-                Bytes::from(""),
+                [].into(),
                 Permission::READABLE,
             ),
             Attribute::new_client_characteristic_configuration(
@@ -538,7 +536,7 @@ mod tests {
             Attribute::new_characteristic_value(
                 0x0012.into(),
                 Uuid::new_uuid16(0x2A29),
-                Bytes::from(""),
+                [].into(),
                 Permission::READABLE,
             ),
             Attribute::new_characteristic(
@@ -550,7 +548,7 @@ mod tests {
             Attribute::new_characteristic_value(
                 0x0014.into(),
                 Uuid::new_uuid16(0x2A24),
-                Bytes::from(""),
+                [].into(),
                 Permission::READABLE,
             ),
             Attribute::new_characteristic(
@@ -562,7 +560,7 @@ mod tests {
             Attribute::new_characteristic_value(
                 0x0016.into(),
                 Uuid::new_uuid16(0x2A25),
-                Bytes::from(""),
+                [].into(),
                 Permission::READABLE,
             ),
             Attribute::new_primary_service(0x0020.into(), Uuid::new_uuid128(0x1234)),
@@ -576,7 +574,7 @@ mod tests {
             Attribute::new_characteristic_value(
                 0x0025.into(),
                 Uuid::new_uuid16(0x2A19),
-                Bytes::from(""),
+                [].into(),
                 Permission::READABLE,
             ),
             Attribute::new_client_characteristic_configuration(

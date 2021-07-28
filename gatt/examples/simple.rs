@@ -1,3 +1,5 @@
+use tokio::io::AsyncWriteExt;
+
 use gatt::characteristics as ch;
 use gatt::services as srv;
 use gatt::{CharacteristicProperties, Registration, Server};
@@ -62,19 +64,23 @@ async fn main() -> anyhow::Result<()> {
 
     pretty_env_logger::init();
 
-    let server = Server::bind()?;
-    let connection = server.accept().await?;
-    let (_, task, outgoing, mut events) = connection.run(false, new_registration());
-    let mut task = tokio::spawn(task);
+    let mut server = Server::bind()?;
+    let mut connection = server.accept(new_registration()).await?.unwrap();
+
+    let mut battery_level_notify = connection.notification(&Token::BatteryLevelNotify)?;
+    let mut events = connection.events();
+
+    let task = connection.run();
+    tokio::pin!(task);
 
     let mut n = 0;
     loop {
         tokio::select! {
-            r = Pin::new(&mut task) => r??,
+            r = Pin::new(&mut task) => r?,
 
             maybe_line = spawn_blocking(|| stdin().read_line(&mut String::new())) => {
                 maybe_line??;
-                outgoing.notify(&Token::BatteryLevelNotify, vec![n])?;
+                battery_level_notify.write_all(&[n]).await?;
                 n += 1;
             }
 
