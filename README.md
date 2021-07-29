@@ -73,21 +73,26 @@ fn new_registration() -> Registration<Token> {
 async fn main() -> anyhow::Result<()> {
     use std::io::stdin;
     use tokio::task::spawn_blocking;
+    use tokio::io::AsyncWriteExt;
 
-    let server = Server::bind()?;
-    /*
-    let connection = server.accept().await?;
-    let (task, outgoing, mut events) = connection.run(new_registration());
-    let mut task = tokio::spawn(task);
+    let mut server = Server::bind()?;
+    let mut connection = server.accept(new_registration()).await?.unwrap();
+    let mut events = connection.events();
+    let mut notification = connection.notification(&Token::BatteryLevelNotify)?;
+    let task = connection.run();
+    tokio::pin!(task);
 
     let mut n = 0;
     loop {
         tokio::select! {
-            r = Pin::new(&mut task) => r??,
+            r = Pin::new(&mut task) => {
+                r?;
+                break;
+            }
 
             maybe_line = spawn_blocking(|| stdin().read_line(&mut String::new())) => {
                 maybe_line??;
-                outgoing.notify(&Token::BatteryLevelNotify, vec![n])?;
+                notification.write_all(&[n]).await?;
                 n += 1;
             }
 
@@ -98,7 +103,6 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
-    */
     // ...
     # Ok(())
 }
@@ -108,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
 
 - x86_64-unknown-linux-gnu
 
-Tested on Linux 5.9 (Arch Linux)
+Tested on Linux 5.13 (Arch Linux)
 
 ### License
 
@@ -124,3 +128,5 @@ at your option.
 Unless you explicitly state otherwise, any contribution intentionally submitted
 for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
 dual licensed as above, without any additional terms or conditions.!
+
+License: MIT OR Apache-2.0
