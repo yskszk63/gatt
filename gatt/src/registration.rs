@@ -197,9 +197,10 @@ where
         }
     }
 
-    pub fn add_descriptor<U>(&mut self, uuid: U, val: &[u8], writable: bool)
+    pub fn add_descriptor<U, B>(&mut self, uuid: U, val: B, writable: bool)
     where
         U: Into<Uuid>,
+        B: AsRef<[u8]>,
     {
         let uuid = uuid.into();
         let handle = self.next_handle();
@@ -209,7 +210,7 @@ where
             Permission::READABLE
         };
         self.attrs
-            .push(Attribute::new_descriptor(handle, uuid, val.into(), perm));
+            .push(Attribute::new_descriptor(handle, uuid, val.as_ref().into(), perm));
     }
 
     pub(crate) fn build(self) -> (Database, HashMap<Handle, T>, HashMap<T, Handle>) {

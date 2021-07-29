@@ -7,14 +7,16 @@ use std::sync::Arc;
 
 use att::packet as pkt;
 use att::server::{
-    Connection as AttConnection, Error as AttError, ErrorResponse, Handler, Indication,
-    Notification, Server as AttServer,
+    Connection as AttConnection, Error as AttError, ErrorResponse, Handler,
+    Server as AttServer,
 };
+pub use att::server::{Notification, Indication};
 use att::Handle;
 use tokio::sync::mpsc;
 
 use crate::database::Database;
 use crate::Registration;
+
 
 #[derive(Debug)]
 struct GattHandler<T> {
