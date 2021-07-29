@@ -209,8 +209,12 @@ where
         } else {
             Permission::READABLE
         };
-        self.attrs
-            .push(Attribute::new_descriptor(handle, uuid, val.as_ref().into(), perm));
+        self.attrs.push(Attribute::new_descriptor(
+            handle,
+            uuid,
+            val.as_ref().into(),
+            perm,
+        ));
     }
 
     pub(crate) fn build(self) -> (Database, HashMap<Handle, T>, HashMap<T, Handle>) {

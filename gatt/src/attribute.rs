@@ -25,7 +25,7 @@ impl BufRead for &[u8] {
         *self = r;
 
         let mut a = [0; N];
-        a.copy_from_slice(&l);
+        a.copy_from_slice(l);
         a
     }
 }
@@ -328,17 +328,17 @@ impl Attribute {
 impl Attribute {
     pub(crate) fn handle(&self) -> &Handle {
         match self {
-            Self::Service { handle, .. } => &handle,
-            Self::Include { handle, .. } => &handle,
-            Self::Characteristic { handle, .. } => &handle,
-            Self::CharacteristicValue { handle, .. } => &handle,
-            Self::CharacteristicExtendedProperties { handle, .. } => &handle,
-            Self::CharacteristicUserDescription { handle, .. } => &handle,
-            Self::ClientCharacteristicConfiguration { handle, .. } => &handle,
-            Self::ServerCharacteristicConfiguration { handle, .. } => &handle,
-            Self::CharacteristicPresentationFormat { handle, .. } => &handle,
-            Self::CharacteristicAggregateFormat { handle, .. } => &handle,
-            Self::Descriptor { handle, .. } => &handle,
+            Self::Service { handle, .. } => handle,
+            Self::Include { handle, .. } => handle,
+            Self::Characteristic { handle, .. } => handle,
+            Self::CharacteristicValue { handle, .. } => handle,
+            Self::CharacteristicExtendedProperties { handle, .. } => handle,
+            Self::CharacteristicUserDescription { handle, .. } => handle,
+            Self::ClientCharacteristicConfiguration { handle, .. } => handle,
+            Self::ServerCharacteristicConfiguration { handle, .. } => handle,
+            Self::CharacteristicPresentationFormat { handle, .. } => handle,
+            Self::CharacteristicAggregateFormat { handle, .. } => handle,
+            Self::Descriptor { handle, .. } => handle,
         }
     }
 
@@ -348,14 +348,14 @@ impl Attribute {
             Self::Service { .. } => &SECONDARY_SERVICE,
             Self::Include { .. } => &INCLUDE,
             Self::Characteristic { .. } => &CHARACTERISTIC,
-            Self::CharacteristicValue { attr_type, .. } => &attr_type,
+            Self::CharacteristicValue { attr_type, .. } => attr_type,
             Self::CharacteristicExtendedProperties { .. } => &CHARACTERISTIC_EXTENDED_PROPERTIES,
             Self::CharacteristicUserDescription { .. } => &CHARACTERISTIC_USER_DESCRIPTION,
             Self::ClientCharacteristicConfiguration { .. } => &CLIENT_CHARACTERISTIC_CONFIGURATION,
             Self::ServerCharacteristicConfiguration { .. } => &SERVER_CHARACTERISTIC_CONFIGURATION,
             Self::CharacteristicPresentationFormat { .. } => &CHARACTERISTIC_PRESENTATION_FORMAT,
             Self::CharacteristicAggregateFormat { .. } => &CHARACTERISTIC_AGGREGATE_FORMAT,
-            Self::Descriptor { uuid, .. } => &uuid,
+            Self::Descriptor { uuid, .. } => uuid,
         }
     }
 

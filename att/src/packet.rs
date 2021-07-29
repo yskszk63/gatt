@@ -839,7 +839,7 @@ impl<'a> Pack for HandleValueNotificationBorrow<'a> {
         W: io::Write,
     {
         self.0.pack(write)?;
-        write.write_all(&self.1)?;
+        write.write_all(self.1)?;
         Ok(())
     }
 }
@@ -862,7 +862,7 @@ impl<'a> Pack for HandleValueIndicationBorrow<'a> {
         W: io::Write,
     {
         self.0.pack(write)?;
-        write.write_all(&self.1)?;
+        write.write_all(self.1)?;
         Ok(())
     }
 }

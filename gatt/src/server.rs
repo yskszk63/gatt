@@ -7,16 +7,14 @@ use std::sync::Arc;
 
 use att::packet as pkt;
 use att::server::{
-    Connection as AttConnection, Error as AttError, ErrorResponse, Handler,
-    Server as AttServer,
+    Connection as AttConnection, Error as AttError, ErrorResponse, Handler, Server as AttServer,
 };
-pub use att::server::{Notification, Indication};
+pub use att::server::{Indication, Notification};
 use att::Handle;
 use tokio::sync::mpsc;
 
 use crate::database::Database;
 use crate::Registration;
-
 
 #[derive(Debug)]
 struct GattHandler<T> {
@@ -304,7 +302,7 @@ where
     }
 
     pub fn address(&self) -> &att::Address {
-        &self.inner.address()
+        self.inner.address()
     }
 
     pub async fn run(self) -> Result<(), RunError> {
