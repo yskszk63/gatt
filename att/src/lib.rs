@@ -1,4 +1,4 @@
-#![doc(html_root_url = "https://docs.rs/att/0.1.2")]
+#![doc(html_root_url = "https://docs.rs/att/0.2.0")]
 //! Bluetooth Low Energy Attribute Protocol Library.
 //!
 //! ref BLUETOOTH CORE SPECIFICATION Version 5.1 | Vol 3, Part F
