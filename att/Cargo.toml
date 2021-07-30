@@ -1,6 +1,6 @@
 [package]
 name = "att"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["yskszk63 <yskszk63@gmail.com>"]
 edition = "2018"
 description = "Bluetooth Attribute Protocol Server"
