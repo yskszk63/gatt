@@ -11,16 +11,17 @@ keywords = ["bluetooth"]
 [dependencies]
 libc = "0.2"
 socket2 = { version = "0.4", features = ["all"] }
-tokio = { version = "1.8", features = ["net", "macros", "sync"] }
-bytes = "1.0"
+tokio = { version = "1.8", features = ["net"] }
 thiserror = "1.0"
 uuid = "0.8"
 derive-new = "0.5"
 getset = "0.1"
 log = "0.4"
 bdaddr = "0.1"
+futures = "0.3.15"
 
 [dev-dependencies]
 anyhow = "1.0"
 pretty_env_logger = "0.4.0"
-tokio = { version = "1.8", features = ["rt", "macros"] }
+tokio = { version = "1.8", features = ["rt", "macros", "io-util"] }
+tokio-test = "0.4.2"

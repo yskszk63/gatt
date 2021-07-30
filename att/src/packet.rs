@@ -1,15 +1,20 @@
 //! ATT Protocol Packet
 use std::convert::TryFrom;
+use std::fmt;
+use std::io;
+use std::num::{NonZeroU8, NonZeroUsize};
 
-use bytes::{Buf, Bytes, BytesMut};
 use derive_new::new as New;
 use getset::Getters;
 
-use crate::pack::{Error as UnpackError, Pack, Unpack};
+//use crate::pack::{Error as UnpackError, Pack, Unpack};
 use crate::size::Size;
 use crate::uuid::Uuid16;
 use crate::{Handle, Uuid};
+use pack::{Error as PackError, Pack, Result as PackResult, Unpack};
 
+#[macro_use]
+pub(crate) mod pack;
 mod impls;
 
 /// ATT Error Response - Error Code
@@ -65,7 +70,10 @@ pub enum ErrorCode {
 }
 
 impl Pack for ErrorCode {
-    fn pack(self, buf: &mut BytesMut) {
+    fn pack<W>(self, write: &mut W) -> PackResult<()>
+    where
+        W: io::Write,
+    {
         let v = match self {
             Self::InvalidHandle => 0x01,
             Self::ReadNotPermitted => 0x02,
@@ -90,13 +98,16 @@ impl Pack for ErrorCode {
             | Self::CommonProfileAndServiceErrorCodes(v)
             | Self::ReservedForFutureUse(v) => v,
         };
-        u8::pack(v, buf);
+        u8::pack(v, write)
     }
 }
 
 impl Unpack for ErrorCode {
-    fn unpack<B: Buf>(buf: &mut B) -> Result<Self, UnpackError> {
-        Ok(match u8::unpack(buf)? {
+    fn unpack<R>(read: &mut R) -> PackResult<Self>
+    where
+        R: io::Read,
+    {
+        Ok(match u8::unpack(read)? {
             0x01 => Self::InvalidHandle,
             0x02 => Self::ReadNotPermitted,
             0x03 => Self::WriteNotPermitted,
@@ -127,21 +138,21 @@ impl Unpack for ErrorCode {
 struct HandlesInformationList(Vec<(Handle, Handle)>);
 
 impl Pack for HandlesInformationList {
-    fn pack(self, buf: &mut BytesMut) {
-        for item in self.0 {
-            item.0.pack(buf);
-            item.1.pack(buf);
-        }
+    fn pack<W>(self, write: &mut W) -> PackResult<()>
+    where
+        W: io::Write,
+    {
+        pack::RemainingVec(self.0).pack(write)
     }
 }
 
 impl Unpack for HandlesInformationList {
-    fn unpack<B: Buf>(buf: &mut B) -> Result<Self, UnpackError> {
-        let mut v = vec![];
-        while buf.has_remaining() {
-            v.push((Unpack::unpack(buf)?, Unpack::unpack(buf)?))
-        }
-        Ok(Self(v))
+    fn unpack<R>(read: &mut R) -> PackResult<Self>
+    where
+        R: io::Read,
+    {
+        let v = pack::RemainingVec::<(Handle, Handle)>::unpack(read)?;
+        Ok(Self(v.0))
     }
 }
 
@@ -157,179 +168,130 @@ impl<'a> IntoIterator for &'a SetOfHandles {
 }
 
 impl Pack for SetOfHandles {
-    fn pack(self, buf: &mut BytesMut) {
-        for item in self.0 {
-            item.pack(buf);
-        }
+    fn pack<W>(self, write: &mut W) -> PackResult<()>
+    where
+        W: io::Write,
+    {
+        pack::RemainingVec(self.0).pack(write)
     }
 }
 
 impl Unpack for SetOfHandles {
-    fn unpack<B: Buf>(buf: &mut B) -> Result<Self, UnpackError> {
-        let mut v = vec![];
-        while buf.has_remaining() {
-            v.push(Unpack::unpack(buf)?)
+    fn unpack<R>(read: &mut R) -> PackResult<Self>
+    where
+        R: io::Read,
+    {
+        let v = pack::RemainingVec::<Handle>::unpack(read)?;
+        Ok(Self(v.0))
+    }
+}
+
+trait AttributeData: Pack + Unpack {
+    fn format(&self) -> NonZeroU8;
+    fn len(val: NonZeroU8) -> PackResult<NonZeroUsize> {
+        Ok(val.into())
+    }
+}
+
+impl AttributeData for (Handle, Uuid) {
+    fn format(&self) -> NonZeroU8 {
+        match &self.1 {
+            Uuid::Uuid16(_) => NonZeroU8::new(0x01).unwrap(),
+            Uuid::Uuid128(_) => NonZeroU8::new(0x02).unwrap(),
         }
-        Ok(Self(v))
+    }
+    fn len(val: NonZeroU8) -> PackResult<NonZeroUsize> {
+        Ok(match val.get() {
+            0x01 => NonZeroUsize::new(2 + 2).unwrap(),
+            0x02 => NonZeroUsize::new(2 + 16).unwrap(),
+            unknown => return Err(PackError::Unexpected(format!("format {}", unknown))),
+        })
+    }
+}
+
+impl AttributeData for (Handle, Box<[u8]>) {
+    fn format(&self) -> NonZeroU8 {
+        NonZeroU8::new(2 + self.1.len() as u8).unwrap()
+    }
+}
+
+impl AttributeData for (Handle, Handle, Box<[u8]>) {
+    fn format(&self) -> NonZeroU8 {
+        NonZeroU8::new(2 + 2 + self.2.len() as u8).unwrap()
     }
 }
 
 #[derive(Debug)]
 struct AttributeDataList<T>(Vec<T>);
 
-impl Pack for AttributeDataList<(Handle, Uuid)> {
-    fn pack(self, buf: &mut BytesMut) {
-        let mut iter = self.0.into_iter();
-        let head = if let Some(head) = iter.next() {
-            head
-        } else {
-            (0 as u8).pack(buf);
-            return;
-        };
-        let format = match &head.1 {
-            Uuid::Uuid16(_) => 0x01u8,
-            Uuid::Uuid128(_) => 0x02u8,
-        };
-
-        let pack_data = |data: (Handle, Uuid), buf: &mut BytesMut| {
-            data.0.pack(buf);
-            match &data.1 {
-                Uuid::Uuid16(_) if format != 0x01 => panic!(),
-                Uuid::Uuid128(_) if format != 0x02 => panic!(),
-                _ => {}
-            };
-            data.1.pack(buf);
-        };
-
-        (format).pack(buf);
-        pack_data(head, buf);
-        for data in iter {
-            pack_data(data, buf);
+impl<A> Pack for AttributeDataList<A>
+where
+    A: AttributeData,
+{
+    fn pack<W>(self, write: &mut W) -> PackResult<()>
+    where
+        W: io::Write,
+    {
+        if self.0.is_empty() {
+            return 0u8.pack(write);
         }
-    }
-}
 
-impl Unpack for AttributeDataList<(Handle, Uuid)> {
-    fn unpack<B: Buf>(buf: &mut B) -> Result<Self, UnpackError> {
-        let format = u8::unpack(buf)?;
-        let len = match format {
-            0x01 => 4,
-            0x02 => 24,
-            v => return Err(UnpackError::Unexpected(format!("unexpected format {}", v))),
-        };
-        Ok(Self(
-            (0..buf.remaining() / len)
-                .map(|_| {
-                    Ok((
-                        Unpack::unpack(buf)?,
-                        match format {
-                            0x01 => Uuid::Uuid16(Unpack::unpack(buf)?),
-                            0x02 => Uuid::Uuid128(Unpack::unpack(buf)?),
-                            x => unreachable!(x),
-                        },
-                    ))
-                })
-                .collect::<Result<_, _>>()?,
-        ))
-    }
-}
+        let format = self.0[0].format();
+        let len = A::len(format)?.get();
+        let mut buf = vec![0; len];
 
-impl Pack for AttributeDataList<(Handle, Bytes)> {
-    fn pack(self, buf: &mut BytesMut) {
-        let mut iter = self.0.into_iter();
-        let head = if let Some(head) = iter.next() {
-            head
-        } else {
-            (0 as u8).pack(buf);
-            return;
-        };
-        let len = head.1.len();
+        format.get().pack(write)?;
 
-        let pack_data = |data: (Handle, Bytes), buf: &mut BytesMut| {
-            data.0.pack(buf);
-            if data.1.len() != len {
-                panic!()
+        for data in self.0 {
+            let mut w = &mut buf[..];
+            data.pack(&mut w)?;
+            if !w.is_empty() {
+                return Err(PackError::Unexpected("length".into()));
             }
-            buf.extend_from_slice(&data.1);
-        };
-
-        ((len + 2) as u8).pack(buf);
-        pack_data(head, buf);
-        for data in iter {
-            pack_data(data, buf);
+            write.write_all(&buf)?;
         }
+        Ok(())
     }
 }
 
-impl Unpack for AttributeDataList<(Handle, Bytes)> {
-    fn unpack<B: Buf>(buf: &mut B) -> Result<Self, UnpackError> {
-        let len = u8::unpack(buf)? as usize;
-        Ok(Self(
-            (0..buf.remaining() / len)
-                .map(|_| Ok((Unpack::unpack(buf)?, buf.copy_to_bytes(len - 2))))
-                .collect::<Result<_, _>>()?,
-        ))
-    }
-}
-
-impl Pack for AttributeDataList<(Handle, Handle, Bytes)> {
-    fn pack(self, buf: &mut BytesMut) {
-        let mut iter = self.0.into_iter();
-        let head = if let Some(head) = iter.next() {
-            head
+impl<A> Unpack for AttributeDataList<A>
+where
+    A: AttributeData,
+{
+    fn unpack<R>(read: &mut R) -> PackResult<Self>
+    where
+        R: io::Read,
+    {
+        let format = u8::unpack(read)?;
+        let format = if let Some(format) = NonZeroU8::new(format) {
+            format
         } else {
-            (0 as u8).pack(buf);
-            return;
+            return Ok(Self(vec![]));
         };
-        let len = head.2.len();
 
-        let pack_data = |data: (Handle, Handle, Bytes), buf: &mut BytesMut| {
-            data.0.pack(buf);
-            data.1.pack(buf);
-            if data.2.len() != len {
-                panic!()
+        let len = A::len(format)?.get();
+        let mut buf = vec![0; len];
+        let mut items = vec![];
+
+        loop {
+            let mut rest = buf.len();
+            while rest > 0 {
+                let n = read.read(&mut buf)?;
+                if n > 0 {
+                    rest -= n;
+                } else {
+                    break;
+                }
             }
-            buf.extend_from_slice(&data.2);
-        };
 
-        ((len + 4) as u8).pack(buf);
-        pack_data(head, buf);
-        for data in iter {
-            pack_data(data, buf);
+            if rest == buf.len() {
+                return Ok(Self(items));
+            }
+
+            let item = A::unpack(&mut &buf[..])?;
+            items.push(item);
         }
     }
-}
-
-impl Unpack for AttributeDataList<(Handle, Handle, Bytes)> {
-    fn unpack<B: Buf>(buf: &mut B) -> Result<Self, UnpackError> {
-        let len = u8::unpack(buf)? as usize;
-        Ok(Self(
-            (0..buf.remaining() / len)
-                .map(|_| {
-                    Ok((
-                        Unpack::unpack(buf)?,
-                        Unpack::unpack(buf)?,
-                        buf.copy_to_bytes(len - 4),
-                    ))
-                })
-                .collect::<Result<_, _>>()?,
-        ))
-    }
-}
-
-/// Failed to convert from Packet
-#[derive(Debug, thiserror::Error)]
-#[error("failed to convert from packet")]
-pub struct TryFromPacketError;
-
-mod seal {
-    pub trait Sealed {}
-}
-
-/// Packet's OP Code
-pub trait HasOpCode {
-    /// Get Packet's OP Code
-    fn opcode() -> OpCode;
 }
 
 macro_rules! packet {
@@ -347,40 +309,16 @@ macro_rules! packet {
         $(
             packable_struct! {
                 $(#[$attrs])*
-                    $vis struct $name {
-                        $(
-                            $(#[$fattrs])*
-                            $fvis $fname : $fty,
-                        )*
-                    }
+                $vis struct $name {
+                    $(
+                        $(#[$fattrs])*
+                        $fvis $fname : $fty,
+                    )*
+                }
             }
 
-            impl $name {
+            impl Packet for $name {
                 const OPCODE: OpCode = OpCode::$name;
-            }
-
-            impl HasOpCode for $name {
-                fn opcode() -> OpCode {
-                    Self::OPCODE
-                }
-            }
-
-            impl seal::Sealed for $name {}
-
-            impl From<$name> for Packet {
-                fn from(v: $name) -> Self {
-                    Self::$name(v)
-                }
-            }
-
-            impl TryFrom<Packet> for $name {
-                type Error = TryFromPacketError;
-                fn try_from(v: Packet) -> Result<Self, Self::Error> {
-                    match v {
-                        Packet::$name(v) => Ok(v),
-                        _ => Err(TryFromPacketError),
-                    }
-                }
             }
         )*
 
@@ -388,37 +326,16 @@ macro_rules! packet {
             /// ATT Op Codes
             #[derive(Debug, PartialEq, Eq, Hash)]
             pub enum OpCode: u8 {
-                $($name => $op,)*
+                $($name = $op,)*
             }
         }
 
         /// ATT Packet
-        #[derive(Debug)]
-        pub enum Packet {
-            $($name($name),)*
-        }
+        pub trait Packet: fmt::Debug {
+            const OPCODE: OpCode;
 
-        impl Pack for Packet {
-            fn pack(self, buf: &mut BytesMut) {
-                match self {
-                    $(
-                        Self::$name(v) => {
-                            $name::OPCODE.pack(buf);
-                            v.pack(buf);
-                        }
-                    )*
-                }
-            }
-        }
-
-        impl Unpack for Packet {
-            fn unpack<B: Buf>(buf: &mut B) -> Result<Self, UnpackError> {
-                let opcode = OpCode::unpack(buf)?;
-                match opcode {
-                    $(
-                        OpCode::$name => Ok($name::unpack(buf)?.into()),
-                    )*
-                }
+            fn opcode() -> OpCode {
+                Self::OPCODE
             }
         }
 
@@ -469,7 +386,7 @@ packet! {
         starting_handle: Handle,
         ending_handle: Handle,
         attribute_type: Uuid16,
-        attribute_value: Bytes,
+        attribute_value: Box<[u8]>,
     }
 
     /// Find By Type Value Response
@@ -490,7 +407,7 @@ packet! {
     /// Read By Type Response
     #[derive(Debug)]
     pub struct ReadByTypeResponse: 0x09 {
-        values: AttributeDataList<(Handle, Bytes)>,
+        values: AttributeDataList<(Handle, Box<[u8]>)>,
     }
 
     /// Read Request
@@ -504,7 +421,7 @@ packet! {
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct ReadResponse: 0x0B {
-        attribute_value: Bytes,
+        attribute_value: Box<[u8]>,
     }
 
     /// Read Blob Request
@@ -519,7 +436,7 @@ packet! {
     #[derive(Debug, New, Getters)]
     #[get = "pub"]
     pub struct ReadBlobResponse: 0x0D {
-        attribute_value: Bytes,
+        attribute_value: Box<[u8]>,
     }
 
     /// Read Multiple Request
@@ -531,7 +448,7 @@ packet! {
     /// Read Multiple Response
     #[derive(Debug, New)]
     pub struct ReadMultipleResponse: 0x0F {
-        set_of_values: Bytes, // FIXME
+        set_of_values: Box<[u8]>, // FIXME
     }
 
     /// Read By Group Type Request
@@ -546,7 +463,7 @@ packet! {
     /// Read By Group Type Response
     #[derive(Debug)]
     pub struct ReadByGroupTypeResponse: 0x11 {
-        values: AttributeDataList<(Handle, Handle, Bytes)>,
+        values: AttributeDataList<(Handle, Handle, Box<[u8]>)>,
     }
 
     /// Write Request
@@ -554,7 +471,7 @@ packet! {
     #[get = "pub"]
     pub struct WriteRequest: 0x12 {
         attribute_handle: Handle,
-        attribute_value: Bytes,
+        attribute_value: Box<[u8]>,
     }
 
     /// Write Response
@@ -567,7 +484,7 @@ packet! {
     #[get = "pub"]
     pub struct WriteCommand: 0x52 {
         attribute_handle: Handle,
-        attribute_value: Bytes,
+        attribute_value: Box<[u8]>,
     }
 
     /// Signed Write Command
@@ -575,8 +492,8 @@ packet! {
     #[get = "pub"]
     pub struct SignedWriteCommand: 0xD2 {
         attribute_handle: Handle,
-        attribute_value: Bytes,
-        authentication_signature: Bytes, // FIXME
+        attribute_value: Box<[u8]>,
+        authentication_signature: Box<[u8]>, // FIXME
     }
 
     /// Prepare Write Request
@@ -585,7 +502,7 @@ packet! {
     pub struct PrepareWriteRequest: 0x16 {
         attribute_handle: Handle,
         value_offset: u16,
-        part_attribute_value: Bytes,
+        part_attribute_value: Box<[u8]>,
     }
 
     /// Prepare Write Response
@@ -594,7 +511,7 @@ packet! {
     pub struct PrepareWriteResponse: 0x17 {
         attribute_handle: Handle,
         value_offset: u16,
-        part_attribute_value: Bytes,
+        part_attribute_value: Box<[u8]>,
     }
 
     /// Execute Write Request
@@ -614,7 +531,7 @@ packet! {
     #[get = "pub"]
     pub struct HandleValueNotification: 0x1B {
         attribute_handle: Handle,
-        attribute_value: Bytes,
+        attribute_value: Box<[u8]>,
     }
 
     /// Handle Value Indication
@@ -622,7 +539,7 @@ packet! {
     #[get = "pub"]
     pub struct HandleValueIndication: 0x1D {
         attribute_handle: Handle,
-        attribute_value: Bytes,
+        attribute_value: Box<[u8]>,
     }
 
     /// Handle Value Confirmation
@@ -632,30 +549,125 @@ packet! {
 
 }
 
+macro_rules! device_recv {
+    (
+        $( $ident:ident, )*
+    ) => {
+        #[derive(Debug)]
+        pub enum DeviceRecv {
+            $( $ident($ident), )*
+        }
+
+        trait AssertUnpack: Packet + Unpack + Sized {}
+
+        $(
+            impl AssertUnpack for $ident {}
+
+            impl From<$ident> for DeviceRecv {
+                fn from(v: $ident) -> Self {
+                    Self::$ident(v)
+                }
+            }
+
+            impl TryFrom<DeviceRecv> for $ident {
+                type Error = DeviceRecv;
+                fn try_from(v: DeviceRecv) -> std::result::Result<Self, Self::Error> {
+                    match v {
+                        DeviceRecv::$ident(v) => Ok(v),
+                        v => Err(v),
+                    }
+                }
+            }
+        )*
+
+        impl Unpack for DeviceRecv {
+            fn unpack<R>(read: &mut R) -> PackResult<Self> where R: io::Read {
+                Ok(match OpCode::unpack(read)? {
+                    $( OpCode::$ident => $ident::unpack(read)?.into(), )*
+                    unknown => return Err(PackError::Unexpected(format!("{:?}", unknown))),
+                })
+            }
+        }
+    }
+}
+
+macro_rules! device_send {
+    ( $( $ident:ident, )* ) => {
+        $(
+            impl DeviceSend for $ident { }
+        )*
+    }
+}
+
+device_recv![
+    ExchangeMtuRequest,
+    FindInformationRequest,
+    FindByTypeValueRequest,
+    ReadByTypeRequest,
+    ReadRequest,
+    ReadBlobRequest,
+    ReadMultipleRequest,
+    ReadByGroupTypeRequest,
+    WriteRequest,
+    PrepareWriteRequest,
+    ExecuteWriteRequest,
+    WriteCommand,
+    SignedWriteCommand,
+    HandleValueConfirmation,
+];
+
+device_send![
+    ErrorResponse,
+    ExchangeMtuResponse,
+    FindInformationResponse,
+    FindByTypeValueResponse,
+    ReadByTypeResponse,
+    ReadResponse,
+    ReadBlobResponse,
+    ReadMultipleResponse,
+    ReadByGroupTypeResponse,
+    WriteResponse,
+    PrepareWriteResponse,
+    ExecuteWriteResponse,
+    HandleValueNotification,
+    HandleValueIndication,
+];
+
+pub trait DeviceSend: Packet + Pack + Sized {
+    fn pack_with_code<W>(self, write: &mut W) -> PackResult<()>
+    where
+        W: io::Write,
+    {
+        Self::OPCODE.pack(write)?;
+        self.pack(write)?;
+        Ok(())
+    }
+}
+
 /// ATT Request
-pub trait Request: seal::Sealed {
+pub trait Request: Packet + TryFrom<DeviceRecv> {
     type Response: Response;
 }
 
 /// ATT Response
-pub trait Response: seal::Sealed {
+pub trait Response: Packet + DeviceSend {
     // truncate by mtu
     fn truncate(&mut self, mtu: usize);
 }
 
 /// ATT Command
-pub trait Command: seal::Sealed {}
+pub trait Command: Packet + TryFrom<DeviceRecv> {}
 
 /// ATT Notification
-pub trait Notification: seal::Sealed {}
+pub trait Notification: Packet + DeviceSend {}
 
 /// ATT Indication
-pub trait Indication: seal::Sealed {
+pub trait Indication: Packet + DeviceSend {
     type Confirmation: Confirmation;
 }
 
 /// ATT Confirmation
-pub trait Confirmation: seal::Sealed {}
+pub trait Confirmation: Packet + TryFrom<DeviceRecv> {}
 
 impl Response for ErrorResponse {
     fn truncate(&mut self, _: usize) {}
@@ -730,7 +742,9 @@ impl Request for ReadRequest {
 }
 impl Response for ReadResponse {
     fn truncate(&mut self, mtu: usize) {
-        self.attribute_value.truncate(mtu - 1);
+        if self.attribute_value.len() > mtu - 1 {
+            self.attribute_value = (&self.attribute_value[..mtu - 1]).into();
+        }
     }
 }
 
@@ -739,7 +753,9 @@ impl Request for ReadBlobRequest {
 }
 impl Response for ReadBlobResponse {
     fn truncate(&mut self, mtu: usize) {
-        self.attribute_value.truncate(mtu - 1);
+        if self.attribute_value.len() > mtu - 1 {
+            self.attribute_value = (&self.attribute_value[..mtu - 1]).into();
+        }
     }
 }
 
@@ -748,7 +764,9 @@ impl Request for ReadMultipleRequest {
 }
 impl Response for ReadMultipleResponse {
     fn truncate(&mut self, mtu: usize) {
-        self.set_of_values.truncate(mtu - 1);
+        if self.set_of_values.len() > mtu - 1 {
+            self.set_of_values = (&self.set_of_values[..mtu - 1]).into();
+        }
     }
 }
 
@@ -785,7 +803,9 @@ impl Request for PrepareWriteRequest {
 }
 impl Response for PrepareWriteResponse {
     fn truncate(&mut self, mtu: usize) {
-        self.part_attribute_value.truncate(mtu);
+        if self.part_attribute_value.len() > mtu - 1 {
+            self.part_attribute_value = (&self.part_attribute_value[..mtu - 1]).into();
+        }
     }
 }
 
@@ -805,13 +825,50 @@ impl Confirmation for HandleValueConfirmation {}
 
 impl Command for SignedWriteCommand {}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Handle Value Notification
+#[derive(Debug, New)]
+pub struct HandleValueNotificationBorrow<'a>(Handle, &'a [u8]);
 
-    #[test]
-    fn test_object_safety() {
-        #[allow(dead_code)]
-        fn foo(_: &dyn Request<Response = dyn Response>) {}
+impl<'a> Packet for HandleValueNotificationBorrow<'a> {
+    const OPCODE: OpCode = HandleValueNotification::OPCODE;
+}
+
+impl<'a> Pack for HandleValueNotificationBorrow<'a> {
+    fn pack<W>(self, write: &mut W) -> PackResult<()>
+    where
+        W: io::Write,
+    {
+        self.0.pack(write)?;
+        write.write_all(self.1)?;
+        Ok(())
     }
+}
+
+impl<'a> DeviceSend for HandleValueNotificationBorrow<'a> {}
+
+impl<'a> Notification for HandleValueNotificationBorrow<'a> {}
+
+/// Handle Value Indication
+#[derive(Debug, New)]
+pub struct HandleValueIndicationBorrow<'a>(Handle, &'a [u8]);
+
+impl<'a> Packet for HandleValueIndicationBorrow<'a> {
+    const OPCODE: OpCode = HandleValueIndication::OPCODE;
+}
+
+impl<'a> Pack for HandleValueIndicationBorrow<'a> {
+    fn pack<W>(self, write: &mut W) -> PackResult<()>
+    where
+        W: io::Write,
+    {
+        self.0.pack(write)?;
+        write.write_all(self.1)?;
+        Ok(())
+    }
+}
+
+impl<'a> DeviceSend for HandleValueIndicationBorrow<'a> {}
+
+impl<'a> Indication for HandleValueNotificationBorrow<'a> {
+    type Confirmation = HandleValueConfirmation;
 }

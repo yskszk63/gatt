@@ -1,5 +1,6 @@
 use std::io::stdin;
 
+use tokio::io::AsyncWriteExt;
 use tokio::task::spawn_blocking;
 
 use att::packet as pkt;
@@ -179,10 +180,12 @@ async fn main() -> anyhow::Result<()> {
 
     pretty_env_logger::init();
 
-    let server = Server::new()?;
+    let mut server = Server::new()?;
     //server.needs_bond_mitm()?;
-    let connection = server.accept().await?;
-    let outbound = connection.outgoing();
+    let (connection, addr) = server.accept().await?.unwrap();
+    println!("accept {:?}", addr);
+    let mut notification = connection.notification(0x0025.into());
+    let mut indication = connection.indication(0x000E.into());
 
     let mut task = tokio::spawn(connection.run(H));
 
@@ -195,8 +198,8 @@ async fn main() -> anyhow::Result<()> {
 
             maybe_line = spawn_blocking(|| stdin().read_line(&mut String::new())) => {
                 maybe_line??;
-                outbound.notify(0x0025.into(), vec![n].into())?;
-                outbound.indicate(0x000E.into(), vec![0x0C, 0x00, 0x0F, 0x00].into()).await?; // GATT / Service Changed
+                notification.write_all(&[n]).await?;
+                indication.write_all(&[0x0C, 0x00, 0x0F, 0x00]).await?;
                 n += 1;
             }
         }

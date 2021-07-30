@@ -1,7 +1,34 @@
-use bytes::{Buf, Bytes, BytesMut};
+//use bytes::Buf;
 
 use att::uuid::Uuid16;
 use att::{Handle, Uuid};
+
+trait BufRead {
+    fn read<const N: usize>(&mut self) -> [u8; N];
+
+    fn get_u8(&mut self) -> u8 {
+        u8::from_le_bytes(self.read())
+    }
+
+    fn get_u16_le(&mut self) -> u16 {
+        u16::from_le_bytes(self.read())
+    }
+
+    fn get_u128_le(&mut self) -> u128 {
+        u128::from_le_bytes(self.read())
+    }
+}
+
+impl BufRead for &[u8] {
+    fn read<const N: usize>(&mut self) -> [u8; N] {
+        let (l, r) = self.split_at(N);
+        *self = r;
+
+        let mut a = [0; N];
+        a.copy_from_slice(l);
+        a
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
@@ -106,7 +133,7 @@ pub(crate) enum Attribute {
     CharacteristicValue {
         handle: Handle,
         attr_type: Uuid,
-        value: Bytes,
+        value: Box<[u8]>,
         permission: Permission,
     },
 
@@ -153,7 +180,7 @@ pub(crate) enum Attribute {
     Descriptor {
         handle: Handle,
         uuid: Uuid,
-        value: Bytes,
+        value: Box<[u8]>,
         permission: Permission,
     },
 }
@@ -208,7 +235,7 @@ impl Attribute {
     pub(crate) fn new_characteristic_value(
         handle: Handle,
         attr_type: Uuid,
-        value: Bytes,
+        value: Box<[u8]>,
         permission: Permission,
     ) -> Self {
         Self::CharacteristicValue {
@@ -286,7 +313,7 @@ impl Attribute {
     pub(crate) fn new_descriptor(
         handle: Handle,
         uuid: Uuid,
-        value: Bytes,
+        value: Box<[u8]>,
         permission: Permission,
     ) -> Self {
         Self::Descriptor {
@@ -301,17 +328,17 @@ impl Attribute {
 impl Attribute {
     pub(crate) fn handle(&self) -> &Handle {
         match self {
-            Self::Service { handle, .. } => &handle,
-            Self::Include { handle, .. } => &handle,
-            Self::Characteristic { handle, .. } => &handle,
-            Self::CharacteristicValue { handle, .. } => &handle,
-            Self::CharacteristicExtendedProperties { handle, .. } => &handle,
-            Self::CharacteristicUserDescription { handle, .. } => &handle,
-            Self::ClientCharacteristicConfiguration { handle, .. } => &handle,
-            Self::ServerCharacteristicConfiguration { handle, .. } => &handle,
-            Self::CharacteristicPresentationFormat { handle, .. } => &handle,
-            Self::CharacteristicAggregateFormat { handle, .. } => &handle,
-            Self::Descriptor { handle, .. } => &handle,
+            Self::Service { handle, .. } => handle,
+            Self::Include { handle, .. } => handle,
+            Self::Characteristic { handle, .. } => handle,
+            Self::CharacteristicValue { handle, .. } => handle,
+            Self::CharacteristicExtendedProperties { handle, .. } => handle,
+            Self::CharacteristicUserDescription { handle, .. } => handle,
+            Self::ClientCharacteristicConfiguration { handle, .. } => handle,
+            Self::ServerCharacteristicConfiguration { handle, .. } => handle,
+            Self::CharacteristicPresentationFormat { handle, .. } => handle,
+            Self::CharacteristicAggregateFormat { handle, .. } => handle,
+            Self::Descriptor { handle, .. } => handle,
         }
     }
 
@@ -321,14 +348,14 @@ impl Attribute {
             Self::Service { .. } => &SECONDARY_SERVICE,
             Self::Include { .. } => &INCLUDE,
             Self::Characteristic { .. } => &CHARACTERISTIC,
-            Self::CharacteristicValue { attr_type, .. } => &attr_type,
+            Self::CharacteristicValue { attr_type, .. } => attr_type,
             Self::CharacteristicExtendedProperties { .. } => &CHARACTERISTIC_EXTENDED_PROPERTIES,
             Self::CharacteristicUserDescription { .. } => &CHARACTERISTIC_USER_DESCRIPTION,
             Self::ClientCharacteristicConfiguration { .. } => &CLIENT_CHARACTERISTIC_CONFIGURATION,
             Self::ServerCharacteristicConfiguration { .. } => &SERVER_CHARACTERISTIC_CONFIGURATION,
             Self::CharacteristicPresentationFormat { .. } => &CHARACTERISTIC_PRESENTATION_FORMAT,
             Self::CharacteristicAggregateFormat { .. } => &CHARACTERISTIC_AGGREGATE_FORMAT,
-            Self::Descriptor { uuid, .. } => &uuid,
+            Self::Descriptor { uuid, .. } => uuid,
         }
     }
 
@@ -348,7 +375,7 @@ impl Attribute {
         }
     }
 
-    pub(crate) fn get(&self, authorized: bool, authenticated: bool) -> Result<Bytes, Error> {
+    pub(crate) fn get(&self, authorized: bool, authenticated: bool) -> Result<Box<[u8]>, Error> {
         if !self.permission().contains(Permission::READABLE) {
             return Err(Error::PermissionDenied);
         }
@@ -381,14 +408,14 @@ impl Attribute {
                 uuid,
                 ..
             } => {
-                let mut result = BytesMut::new();
+                let mut result = vec![];
                 result.extend_from_slice(&included_service_handle.as_u16().to_le_bytes());
                 result.extend_from_slice(&end_group_handle.as_u16().to_le_bytes());
                 match uuid {
                     Uuid::Uuid16(uuid) => result.extend_from_slice(&uuid.as_u16().to_le_bytes()),
                     Uuid::Uuid128(uuid) => result.extend_from_slice(&uuid.as_u128().to_le_bytes()),
                 }
-                result.freeze()
+                result.into()
             }
 
             Self::Characteristic {
@@ -397,14 +424,14 @@ impl Attribute {
                 uuid,
                 ..
             } => {
-                let mut result = BytesMut::new();
+                let mut result = vec![];
                 result.extend_from_slice(&properties.bits().to_le_bytes());
                 result.extend_from_slice(&value_handle.as_u16().to_le_bytes());
                 match uuid {
                     Uuid::Uuid16(uuid) => result.extend_from_slice(&uuid.as_u16().to_le_bytes()),
                     Uuid::Uuid128(uuid) => result.extend_from_slice(&uuid.as_u128().to_le_bytes()),
                 }
-                result.freeze()
+                result.into()
             }
 
             Self::CharacteristicValue { value, .. } => value.clone(),
@@ -413,23 +440,25 @@ impl Attribute {
                 extended_properties,
                 ..
             } => {
-                let mut result = BytesMut::new();
+                let mut result = vec![];
                 result.extend_from_slice(&extended_properties.bits().to_le_bytes());
-                result.freeze()
+                result.into()
             }
 
-            Self::CharacteristicUserDescription { description, .. } => description.clone().into(),
+            Self::CharacteristicUserDescription { description, .. } => {
+                description.as_bytes().into()
+            }
 
             Self::ClientCharacteristicConfiguration { configuration, .. } => {
-                let mut result = BytesMut::new();
+                let mut result = vec![];
                 result.extend_from_slice(&configuration.bits().to_le_bytes());
-                result.freeze()
+                result.into()
             }
 
             Self::ServerCharacteristicConfiguration { configuration, .. } => {
-                let mut result = BytesMut::new();
+                let mut result = vec![];
                 result.extend_from_slice(&configuration.bits().to_le_bytes());
-                result.freeze()
+                result.into()
             }
 
             Self::CharacteristicPresentationFormat {
@@ -440,38 +469,35 @@ impl Attribute {
                 description,
                 ..
             } => {
-                let mut result = BytesMut::new();
+                let mut result = vec![];
                 result.extend_from_slice(&format.to_le_bytes());
                 result.extend_from_slice(&exponent.to_le_bytes());
                 result.extend_from_slice(&unit.to_le_bytes());
                 result.extend_from_slice(&name_space.to_le_bytes());
                 result.extend_from_slice(&description.to_le_bytes());
-                result.freeze()
+                result.into()
             }
 
             Self::CharacteristicAggregateFormat {
                 attribute_handles, ..
             } => {
-                let mut result = BytesMut::new();
+                let mut result = vec![];
                 for handle in attribute_handles {
                     result.extend_from_slice(&handle.as_u16().to_le_bytes());
                 }
-                result.freeze()
+                result.into()
             }
 
             Self::Descriptor { value, .. } => value.clone(),
         })
     }
 
-    pub(crate) fn set<B>(
+    pub(crate) fn set(
         &mut self,
-        val: &mut B,
+        mut val: &[u8],
         authorized: bool,
         authenticated: bool,
-    ) -> Result<(), Error>
-    where
-        B: Buf,
-    {
+    ) -> Result<(), Error> {
         if !self.permission().contains(Permission::WRITEABLE) {
             return Err(Error::PermissionDenied);
         }
@@ -493,7 +519,7 @@ impl Attribute {
         }
 
         match self {
-            Self::Service { uuid, .. } => match val.remaining() {
+            Self::Service { uuid, .. } => match val.len() {
                 2 => *uuid = Uuid::new_uuid16(val.get_u16_le()),
                 16 => *uuid = Uuid::new_uuid128(val.get_u128_le()),
                 _ => return Err(Error::InvalidDataLength),
@@ -505,13 +531,13 @@ impl Attribute {
                 uuid,
                 ..
             } => {
-                match val.remaining() {
+                match val.len() {
                     6 | 20 => {}
                     _ => return Err(Error::InvalidDataLength),
                 }
                 *included_service_handle = val.get_u16_le().into();
                 *end_group_handle = val.get_u16_le().into();
-                match val.remaining() {
+                match val.len() {
                     2 => *uuid = Uuid::new_uuid16(val.get_u16_le()),
                     16 => *uuid = Uuid::new_uuid128(val.get_u128_le()),
                     _ => unreachable!(),
@@ -524,13 +550,13 @@ impl Attribute {
                 uuid,
                 ..
             } => {
-                match val.remaining() {
+                match val.len() {
                     5 | 19 => {}
                     _ => return Err(Error::InvalidDataLength),
                 }
                 *properties = CharacteristicProperties::from_bits_truncate(val.get_u8());
                 *value_handle = val.get_u16_le().into();
-                match val.remaining() {
+                match val.len() {
                     2 => *uuid = Uuid::new_uuid16(val.get_u16_le()),
                     16 => *uuid = Uuid::new_uuid128(val.get_u128_le()),
                     _ => return Err(Error::InvalidDataLength),
@@ -538,14 +564,14 @@ impl Attribute {
             }
 
             Self::CharacteristicValue { value, .. } => {
-                *value = val.copy_to_bytes(val.remaining());
+                *value = val.into();
             }
 
             Self::CharacteristicExtendedProperties {
                 extended_properties,
                 ..
             } => {
-                if !val.has_remaining() {
+                if val.is_empty() {
                     return Err(Error::InvalidDataLength);
                 }
                 *extended_properties =
@@ -553,16 +579,14 @@ impl Attribute {
             }
 
             Self::CharacteristicUserDescription { description, .. } => {
-                let mut b = vec![0; val.remaining()];
-                val.copy_to_slice(&mut b);
-                *description = match String::from_utf8(b) {
+                *description = match String::from_utf8(val.to_vec()) {
                     Ok(v) => v,
                     Err(_) => return Err(Error::InvalidDataLength),
                 }
             }
 
             Self::ClientCharacteristicConfiguration { configuration, .. } => {
-                if val.remaining() < 2 {
+                if val.len() < 2 {
                     return Err(Error::InvalidDataLength);
                 }
                 *configuration =
@@ -570,7 +594,7 @@ impl Attribute {
             }
 
             Self::ServerCharacteristicConfiguration { configuration, .. } => {
-                if val.remaining() < 2 {
+                if val.len() < 2 {
                     return Err(Error::InvalidDataLength);
                 }
                 *configuration =
@@ -585,7 +609,7 @@ impl Attribute {
                 description,
                 ..
             } => {
-                if val.remaining() != 8 {
+                if val.len() != 8 {
                     return Err(Error::InvalidDataLength);
                 }
                 *format = val.get_u8();
@@ -599,16 +623,16 @@ impl Attribute {
                 attribute_handles, ..
             } => {
                 let mut v = vec![];
-                while val.remaining() > 2 {
+                while val.len() > 2 {
                     v.push(val.get_u16_le().into());
                 }
-                if val.has_remaining() {
+                if !val.is_empty() {
                     return Err(Error::InvalidDataLength);
                 }
                 *attribute_handles = v;
             }
 
-            Self::Descriptor { value, .. } => *value = val.copy_to_bytes(val.remaining()),
+            Self::Descriptor { value, .. } => *value = val.into(),
         };
         Ok(())
     }

@@ -68,14 +68,18 @@
 //! Unless you explicitly state otherwise, any contribution intentionally submitted
 //! for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
 //! dual licensed as above, without any additional terms or conditions.!
+
 pub use crate::uuid::Uuid;
 pub use bdaddr::Address;
 pub use handle::Handle;
+pub use handler::{ErrorResponse, Handler};
 pub use server::Server;
 
 #[macro_use]
-mod pack;
+mod macros;
+
 mod handle;
+mod handler;
 pub mod packet;
 pub mod server;
 mod size;

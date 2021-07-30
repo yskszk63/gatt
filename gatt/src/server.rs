@@ -1,6 +1,5 @@
 //! GATT Protocol Server
 use std::collections::HashMap;
-use std::future::Future;
 use std::hash::Hash;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,11 +7,10 @@ use std::sync::Arc;
 
 use att::packet as pkt;
 use att::server::{
-    Connection as AttConnection, ErrorResponse, Handler, Outgoing, RunError as AttRunError,
-    Server as AttServer,
+    Connection as AttConnection, Error as AttError, ErrorResponse, Handler, Server as AttServer,
 };
+pub use att::server::{Indication, Notification};
 use att::Handle;
-use bytes::Bytes;
 use tokio::sync::mpsc;
 
 use crate::database::Database;
@@ -22,7 +20,7 @@ use crate::Registration;
 struct GattHandler<T> {
     db: Database,
     write_tokens: HashMap<Handle, T>,
-    events_tx: mpsc::UnboundedSender<Event<T>>,
+    events_txs: Vec<mpsc::UnboundedSender<Event<T>>>,
     authenticated: Arc<AtomicBool>,
 }
 
@@ -30,13 +28,13 @@ impl<T> GattHandler<T> {
     fn new(
         db: Database,
         write_tokens: HashMap<Handle, T>,
-        events_tx: mpsc::UnboundedSender<Event<T>>,
+        events_txs: Vec<mpsc::UnboundedSender<Event<T>>>,
         authenticated: Arc<AtomicBool>,
     ) -> Self {
         Self {
             db,
             write_tokens,
-            events_tx,
+            events_txs,
             authenticated,
         }
     }
@@ -122,7 +120,7 @@ where
         &mut self,
         item: &pkt::ReadBlobRequest,
     ) -> Result<pkt::ReadBlobResponse, ErrorResponse> {
-        let mut r = match self
+        let r = match self
             .db
             .read(item.attribute_handle(), false, self.authenticated())
         {
@@ -130,7 +128,7 @@ where
             Err((h, e)) => return Err(ErrorResponse::new(h, e)),
         };
         let offset = *item.attribute_offset() as usize;
-        Ok(pkt::ReadBlobResponse::new(r.split_off(offset)))
+        Ok(pkt::ReadBlobResponse::new(r[offset..].into()))
     }
 
     fn handle_read_by_group_type_request(
@@ -155,9 +153,10 @@ where
     ) -> Result<pkt::WriteResponse, ErrorResponse> {
         let value = item.attribute_value();
         if let Some(token) = self.write_tokens.get(item.attribute_handle()) {
-            self.events_tx
-                .send(Event::Write(token.clone(), value.to_vec().into()))
-                .ok();
+            for tx in &self.events_txs {
+                tx.send(Event::Write(token.clone(), value.to_vec().into()))
+                    .ok();
+            }
         }
 
         match self.db.write(item.attribute_handle(), value, false, false) {
@@ -169,9 +168,10 @@ where
     fn handle_write_command(&mut self, item: &pkt::WriteCommand) {
         let value = item.attribute_value();
         if let Some(token) = self.write_tokens.get(item.attribute_handle()) {
-            self.events_tx
-                .send(Event::Write(token.clone(), value.to_vec().into()))
-                .ok();
+            for tx in &self.events_txs {
+                tx.send(Event::Write(token.clone(), value.to_vec().into()))
+                    .ok();
+            }
         }
 
         if let Err(err) = self.db.write(
@@ -187,9 +187,10 @@ where
     fn handle_signed_write_command(&mut self, item: &pkt::SignedWriteCommand) {
         let value = item.attribute_value();
         if let Some(token) = self.write_tokens.get(item.attribute_handle()) {
-            self.events_tx
-                .send(Event::Write(token.clone(), value.to_vec().into()))
-                .ok();
+            for tx in &self.events_txs {
+                tx.send(Event::Write(token.clone(), value.to_vec().into()))
+                    .ok();
+            }
         }
 
         if let Err(err) =
@@ -208,52 +209,20 @@ pub struct ChannelError;
 
 /// GATT Server control.
 #[derive(Debug)]
-pub struct Control<T> {
-    inner: Outgoing,
-    token_map: HashMap<T, Handle>,
+pub struct Authenticator {
     authenticated: Arc<AtomicBool>,
 }
 
-impl<T> Control<T> {
+impl Authenticator {
     pub fn mark_authenticated(&self) {
         self.authenticated.store(true, Ordering::SeqCst);
-    }
-}
-
-impl<T> Control<T>
-where
-    T: Eq + Hash,
-{
-    /// Notify to device
-    pub fn notify<B>(&self, token: &T, val: B) -> Result<(), ChannelError>
-    where
-        B: Into<Bytes>,
-    {
-        let handle = self.token_map.get(token).unwrap();
-        self.inner
-            .notify(handle.clone(), val.into())
-            .map_err(|_| ChannelError)?;
-        Ok(())
-    }
-
-    /// Indicate to device
-    pub async fn indicate<B>(&self, token: &T, val: B) -> Result<(), ChannelError>
-    where
-        B: Into<Bytes>,
-    {
-        let handle = self.token_map.get(token).unwrap();
-        self.inner
-            .indicate(handle.clone(), val.into())
-            .await
-            .map_err(|_| ChannelError)?;
-        Ok(())
     }
 }
 
 /// GATT Event
 #[derive(Debug)]
 pub enum Event<T> {
-    Write(T, Bytes),
+    Write(T, Box<[u8]>),
 }
 
 /// GATT Event Stream
@@ -266,72 +235,97 @@ impl<T> Events<T> {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("handle not found.")]
+pub struct HandleNotFound;
+
 /// Run [`Connection::run`]
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
-pub struct RunError(#[from] AttRunError);
+pub struct RunError(#[from] AttError);
 
 /// GATT Connection
-#[derive(Debug)]
-pub struct Connection {
+pub struct Connection<T> {
     inner: AttConnection,
+    event_txs: Vec<mpsc::UnboundedSender<Event<T>>>,
+    db: Database,
+    write_tokens: HashMap<Handle, T>,
+    notify_or_indicate_handles: HashMap<T, Handle>,
+    authenticated: Arc<AtomicBool>, // TODO
 }
 
-impl Connection {
-    pub fn address(&self) -> &att::Address {
-        &self.inner.address()
-    }
-
-    pub fn run<T>(
-        self,
-        authenticated: bool,
-        registration: Registration<T>,
-    ) -> (
-        att::Address,
-        impl Future<Output = Result<(), RunError>>,
-        Control<T>,
-        Events<T>,
-    )
-    where
-        T: Hash + Eq + Clone,
-    {
+impl<T> Connection<T>
+where
+    T: Eq + Hash + Clone,
+{
+    fn new(inner: AttConnection, registration: Registration<T>) -> Self {
         let (db, write_tokens, notify_or_indicate_handles) = registration.build();
-        let outgoing = self.inner.outgoing();
-        let address = self.inner.address().clone();
 
-        let (tx, rx) = mpsc::unbounded_channel();
-        let events = Events(rx);
-
-        let authenticated = Arc::new(AtomicBool::new(authenticated));
-        let task = self.inner.run(GattHandler::<T>::new(
+        Self {
+            inner,
+            event_txs: vec![],
             db,
             write_tokens,
-            tx,
-            authenticated.clone(),
-        ));
-        let task = async move {
-            if let Err(e) = task.await {
-                Err(e.into())
-            } else {
-                Ok(())
-            }
-        };
+            notify_or_indicate_handles,
+            authenticated: Arc::new(AtomicBool::from(false)),
+        }
+    }
 
-        (
-            address,
-            task,
-            Control {
-                inner: outgoing,
-                token_map: notify_or_indicate_handles,
+    pub fn authenticator(&self) -> Authenticator {
+        Authenticator {
+            authenticated: self.authenticated.clone(),
+        }
+    }
+
+    pub fn events(&mut self) -> Events<T> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.event_txs.push(tx);
+        Events(rx)
+    }
+
+    pub fn notification(&self, token: &T) -> Result<Notification, HandleNotFound> {
+        if let Some(handle) = self.notify_or_indicate_handles.get(token) {
+            let notification = self.inner.notification(handle.clone());
+            Ok(notification)
+        } else {
+            Err(HandleNotFound)
+        }
+    }
+
+    pub fn indication(&self, token: &T) -> Result<Indication, HandleNotFound> {
+        if let Some(handle) = self.notify_or_indicate_handles.get(token) {
+            let indication = self.inner.indication(handle.clone());
+            Ok(indication)
+        } else {
+            Err(HandleNotFound)
+        }
+    }
+
+    pub fn address(&self) -> &att::Address {
+        self.inner.address()
+    }
+
+    pub async fn run(self) -> Result<(), RunError> {
+        let Self {
+            db,
+            write_tokens,
+            event_txs,
+            authenticated,
+            ..
+        } = self;
+        self.inner
+            .run(GattHandler::<T>::new(
+                db,
+                write_tokens,
+                event_txs,
                 authenticated,
-            },
-            events,
-        )
+            ))
+            .await?;
+        Ok(())
     }
 }
 
 /// GATT Protocol Server
-#[derive(Debug)]
 pub struct Server {
     inner: AttServer,
 }
@@ -343,9 +337,18 @@ impl Server {
     }
 
     /// Accept [`Connection`]
-    pub async fn accept(&self) -> io::Result<Connection> {
-        let connection = self.inner.accept().await?;
-        Ok(Connection { inner: connection })
+    pub async fn accept<T>(
+        &mut self,
+        registration: Registration<T>,
+    ) -> io::Result<Option<Connection<T>>>
+    where
+        T: Eq + Hash + Clone,
+    {
+        if let Some((connection, _)) = self.inner.accept().await? {
+            Ok(Some(Connection::new(connection, registration)))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn needs_bond(&self) -> io::Result<()> {
