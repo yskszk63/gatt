@@ -4,9 +4,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
-use futures::channel::oneshot;
-use futures::lock::{Mutex, MutexGuard};
-use futures::{ready, FutureExt, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
+use futures_channel::oneshot;
+use futures_core::ready;
+use futures_core::stream::Stream;
+use futures_sink::Sink;
+use futures_util::future::FutureExt;
+use futures_util::lock::{Mutex, MutexGuard};
+use futures_util::sink::SinkExt;
+use futures_util::stream::{StreamExt, TryStreamExt};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::packet as pkt;
@@ -634,7 +639,6 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::{SinkExt, TryStreamExt};
     use std::convert::TryFrom;
     use tokio::io::AsyncWriteExt;
     use tokio_test::io::Builder;

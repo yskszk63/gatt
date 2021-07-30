@@ -14,7 +14,9 @@ resolver = "2"
 att = { path = "att", version = "0.2.0"}
 bitflags = "1.2"
 thiserror = "1.0"
-tokio = { version = "1.8", features = ["sync"] }
+futures-util = "0.3"
+futures-channel = "0.3"
+tokio = "1.8"
 log = "0.4"
 
 [dev-dependencies]

@@ -11,7 +11,8 @@ use att::server::{
 };
 pub use att::server::{Indication, Notification};
 use att::Handle;
-use tokio::sync::mpsc;
+use futures_channel::mpsc;
+use futures_util::stream::StreamExt;
 
 use crate::database::Database;
 use crate::Registration;
@@ -154,7 +155,7 @@ where
         let value = item.attribute_value();
         if let Some(token) = self.write_tokens.get(item.attribute_handle()) {
             for tx in &self.events_txs {
-                tx.send(Event::Write(token.clone(), value.to_vec().into()))
+                tx.unbounded_send(Event::Write(token.clone(), value.to_vec().into()))
                     .ok();
             }
         }
@@ -169,7 +170,7 @@ where
         let value = item.attribute_value();
         if let Some(token) = self.write_tokens.get(item.attribute_handle()) {
             for tx in &self.events_txs {
-                tx.send(Event::Write(token.clone(), value.to_vec().into()))
+                tx.unbounded_send(Event::Write(token.clone(), value.to_vec().into()))
                     .ok();
             }
         }
@@ -188,7 +189,7 @@ where
         let value = item.attribute_value();
         if let Some(token) = self.write_tokens.get(item.attribute_handle()) {
             for tx in &self.events_txs {
-                tx.send(Event::Write(token.clone(), value.to_vec().into()))
+                tx.unbounded_send(Event::Write(token.clone(), value.to_vec().into()))
                     .ok();
             }
         }
@@ -231,7 +232,7 @@ pub struct Events<T>(mpsc::UnboundedReceiver<Event<T>>);
 
 impl<T> Events<T> {
     pub async fn next(&mut self) -> Option<Event<T>> {
-        self.0.recv().await
+        self.0.next().await
     }
 }
 
@@ -278,7 +279,7 @@ where
     }
 
     pub fn events(&mut self) -> Events<T> {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::unbounded();
         self.event_txs.push(tx);
         Events(rx)
     }
