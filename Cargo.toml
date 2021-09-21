@@ -16,11 +16,11 @@ bitflags = "1.2"
 thiserror = "1.0"
 futures-util = "0.3"
 futures-channel = "0.3"
-tokio = "1.8"
+tokio = "1.11"
 log = "0.4"
 
 [dev-dependencies]
-tokio = { version = "1.8", features = ["rt", "macros", "io-util"] }
+tokio = { version = "1.11", features = ["rt", "macros", "io-util"] }
 anyhow = "1.0"
 pretty_env_logger = "0.4"
 
