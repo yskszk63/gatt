@@ -15,16 +15,16 @@ futures-core = { version = "0.3", default-features = false }
 futures-sink = { version = "0.3", default-features = false }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 futures-channel = { version = "0.3", default-features = false, features = ["std"] }
-tokio = { version = "1.11", features = ["net"] }
+tokio = { version = "1.14", features = ["net"] }
 thiserror = "1.0"
 uuid = "0.8"
 derive-new = "0.5"
 getset = "0.1"
 log = "0.4"
-bdaddr = "0.1"
+bdaddr = "0.2.0-alpha.4"
 
 [dev-dependencies]
 anyhow = "1.0"
 pretty_env_logger = "0.4.0"
-tokio = { version = "1.11", features = ["rt", "macros", "io-util"] }
+tokio = { version = "1.14", features = ["rt", "macros", "io-util"] }
 tokio-test = "0.4.2"

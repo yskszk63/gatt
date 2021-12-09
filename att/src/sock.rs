@@ -5,6 +5,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use bdaddr::BdAddr;
 use futures_core::ready;
 use futures_core::stream::Stream;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
@@ -13,8 +14,9 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 // <bluetooth/bluetooth.h>
 const BTPROTO_L2CAP: libc::c_int = 0;
+const BDADDR_BREDR: u8 = 0x00;
 const BDADDR_LE_PUBLIC: u8 = 0x01;
-//const BDADDR_LE_RANDOM: u8 = 0x02;
+const BDADDR_LE_RANDOM: u8 = 0x02;
 const SOL_BLUETOOTH: libc::c_int = 274;
 const BT_SECURITY: libc::c_int = 4;
 //pub(crate) const BT_SECURITY_SDP: u8 = 0;
@@ -99,7 +101,16 @@ fn set_sockopt_bt_security(fd: RawFd, level: u8, key_size: u8) -> io::Result<()>
 pub(crate) fn try_from(addr: socket2::SockAddr) -> io::Result<crate::Address> {
     if addr.family() == libc::AF_BLUETOOTH as libc::sa_family_t {
         let addr = unsafe { &*(addr.as_ptr() as *const sockaddr_l2) };
-        Ok(addr.l2_bdaddr.b.into())
+        let bdaddr = BdAddr::from(addr.l2_bdaddr.b);
+        match addr.l2_bdaddr_type {
+            BDADDR_BREDR => Ok(bdaddr.to_br_edr_addr()),
+            BDADDR_LE_PUBLIC => Ok(bdaddr.to_le_public_addr()),
+            BDADDR_LE_RANDOM => Ok(bdaddr.to_le_random_addr()),
+            _ => Err(io::Error::new(
+                io::ErrorKind::Other,
+                "unexpected l2 address type.",
+            )),
+        }
     } else {
         Err(io::Error::new(
             io::ErrorKind::Other,
