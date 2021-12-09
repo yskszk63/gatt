@@ -1,4 +1,4 @@
-#![doc(html_root_url = "https://docs.rs/gatt/0.2.1")]
+#![doc(html_root_url = "https://docs.rs/gatt/0.3.0-alpha.1")]
 //! Bluetooth Low Energy Generic Attribute Profile
 //!
 //! ref BLUETOOTH CORE SPECIFICATION Version 5.1 | Vol 3, Part G
